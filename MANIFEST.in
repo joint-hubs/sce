@@ -1,0 +1,35 @@
+# Include essential files
+include LICENSE
+include README.md
+include CHANGELOG.md
+include CONTRIBUTING.md
+include CITATION.cff
+include pyproject.toml
+
+# Include type hints marker
+include sce/py.typed
+
+# Include config files
+recursive-include configs *.toml *.md
+
+# Include data manifests (not the parquet files themselves)
+include data/manifests/*.txt
+include data/parquet/README.md
+
+# Include examples
+recursive-include examples *.py *.md
+
+# Exclude build artifacts
+exclude .coverage
+prune htmlcov
+prune .pytest_cache
+prune .mypy_cache
+prune .ruff_cache
+prune __pycache__
+prune *.egg-info
+prune build
+prune dist
+prune results
+
+# Exclude large data files
+exclude data/parquet/*.parquet

@@ -1,0 +1,49 @@
+# Configuration for Poland short-term rental dataset
+
+[dataset]
+name = "rental_poland_short"
+description = "Short-term rental listings in Poland"
+source = "in-repo"
+path = "data/parquet/rental_poland_short.parquet"
+
+# [hierarchy] - DEPRECATED: Now uses auto-detection
+# categorical_cols are auto-detected from DataFrame
+
+[target]
+column = "price_PLN_per_night"
+description = "Nightly rental price in PLN"
+
+[features]
+numeric = ["capacity", "host_rating", "host_review_count", "rating_cleanliness", "review_count"]
+categorical = ["city", "room_type", "property_type", "is_superhost"]
+
+[sce]
+# Statistical Context Engineering configuration
+aggregations = ["mean", "median", "std", "count", "q05", "q10", "q20", "q33", "q66", "q80", "q90", "q95"]
+min_group_size = 3
+use_cross_fitting = true
+n_folds = 5
+
+[model]
+# XGBoost configuration
+type = "xgboost"
+n_estimators = 100
+max_depth = 6
+learning_rate = 0.1
+
+[run]
+# Optional: multi-preset model search settings
+xgboost_configs = ["shallow", "boosted", "default"]
+p_threshold = 0.05
+
+[run.search]
+sampling_pct = 5.0
+min_configs = 50
+max_configs = 500
+run_ablation = true
+run_significance_selection = true
+
+[run.lm_selection]
+enabled = true
+p_threshold = 0.05
+max_features = 100

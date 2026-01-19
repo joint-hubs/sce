@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sce"
+version = "0.3.0"
+description = "Statistical Context Engineering: Hierarchical feature enrichment for regression models"
+readme = "README.md"
+license = {text = "CC BY-NC 4.0"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Mateusz Stachowicz"},
+    {name = "Stanisław Halkiewicz"},
+]
+keywords = [
+    "machine-learning",
+    "feature-engineering",
+    "statistical-context",
+    "regression",
+    "hierarchical-features",
+    "xgboost"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: Free for non-commercial use",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
+
+dependencies = [
+    "numpy>=1.21.0,<2.0.0",
+    "pandas>=1.3.0,<3.0.0",
+    "scikit-learn>=1.0.0,<2.0.0",
+    "xgboost>=1.5.0,<3.0.0",
+    "joblib>=1.1.0",
+    "toml>=0.10.2",
+    "tomli>=2.0.0;python_version<'3.11'",  # Backport for Python < 3.11
+    "pyarrow>=10.0.0",  # For parquet support
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+data = [
+    "huggingface-hub>=0.19.0",  # For remote dataset fetching
+    "requests>=2.31.0",  # For dataset downloads
+    "tqdm>=4.66.0",  # Optional progress bar for downloads
+]
+viz = [
+    "matplotlib>=3.5.0",
+    "seaborn>=0.12.0",
+]
+all = [
+    "sce[dev,data,viz]",
+]
+
+[project.urls]
+Homepage = "https://github.com/joint-hubs/sce"
+Documentation = "https://github.com/joint-hubs/sce#readme"
+Repository = "https://github.com/joint-hubs/sce.git"
+"Bug Tracker" = "https://github.com/joint-hubs/sce/issues"
+Changelog = "https://github.com/joint-hubs/sce/blob/main/CHANGELOG.md"
+
+[project.scripts]
+sce = "sce.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sce*"]
+
+[tool.setuptools.package-data]
+sce = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=sce --cov-report=html --cov-report=term-missing"
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = [
+    "E501",  # Line length handled by black
+    "W293",  # Blank line contains whitespace
+    "W291",  # Trailing whitespace
+    "N803",  # Argument name 'X' should be lowercase (sklearn convention)
+    "N806",  # Variable 'X_...' should be lowercase (sklearn convention)
+]

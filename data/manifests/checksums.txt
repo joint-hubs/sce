@@ -1,0 +1,7 @@
+# Dataset manifests for integrity verification
+# Format: dataset_name | checksum | size_bytes | source_url
+
+rental_poland_short.parquet | sha256:108a7b08bdc7f062d75edf8f9f95c526e9664bde07bc75ff3d5db448215255c8 | 27904 | local
+rental_poland_long.parquet | sha256:1276bbaccb7881cc23eceff2671dcf41d991241840ca7c513c13a7a596305038 | 26206 | local
+rental_uae_contracts.parquet | sha256:1513152dda8e5a957c127b67baa180728ae9567ae71581715d21458a7166ff9b | 89977352 | https://huggingface.co/datasets/joint-hubs/rental_uae_contracts/resolve/main/rental_uae_contracts.parquet
+sales_uae_transactions.parquet | sha256:4bdb91f28a5a41977cf3c931f42ee111a84b04bb9b4fa771b6dc2cb9f5c6486e | 19605317 | https://huggingface.co/datasets/joint-hubs/sales_uae_transactions/resolve/main/sales_uae_transactions.parquet

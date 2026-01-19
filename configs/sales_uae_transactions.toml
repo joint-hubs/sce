@@ -1,0 +1,49 @@
+# Configuration for UAE property sales transactions dataset
+
+[dataset]
+name = "sales_uae_transactions"
+description = "Property sales transactions in Dubai, UAE"
+source = "remote"
+path = "data/parquet/sales_uae_transactions.parquet"
+
+# [hierarchy] - DEPRECATED: Now uses auto-detection
+# categorical_cols are auto-detected from DataFrame
+
+[target]
+column = "amount"
+description = "Transaction amount in AED"
+
+[features]
+numeric = ["property_size_sq_m", "transaction_size_sq_m", "no_of_buyer", "no_of_seller"]
+categorical = ["area", "usage", "property_type", "property_sub_type", "transaction_type", "is_free_hold", "master_project"]
+
+[sce]
+aggregations = ["mean", "median", "std", "count", "q05", "q10", "q20", "q33", "q66", "q80", "q90", "q95"]
+min_group_size = 10
+use_cross_fitting = true
+n_folds = 5
+include_interactions = false
+max_interaction_depth = 1
+max_cardinality = 50
+
+[model]
+type = "xgboost"
+n_estimators = 100
+max_depth = 6
+learning_rate = 0.1
+
+[run]
+xgboost_configs = ["shallow", "boosted", "default"]
+p_threshold = 0.05
+
+[run.search]
+sampling_pct = 5.0
+min_configs = 50
+max_configs = 500
+run_ablation = true
+run_significance_selection = true
+
+[run.lm_selection]
+enabled = true
+p_threshold = 0.05
+max_features = 100

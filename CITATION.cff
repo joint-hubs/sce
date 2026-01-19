@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Statistical Context Engineering"
+abstract: "A framework for enriching regression datasets with hierarchical statistical features using leakage-safe cross-fitting."
+authors:
+  - family-names: "Stachowicz"
+    given-names: "Mateusz"
+  - family-names: "Halkiewicz"
+    given-names: "Stanisław M. S."
+version: 0.3.0
+date-released: 2026-01-19
+repository-code: "https://github.com/joint-hubs/sce"
+keywords:
+  - machine-learning
+  - feature-engineering
+  - statistical-context
+  - hierarchical-features
+  - regression
+  - bayesian-estimation
+license: "CC-BY-NC-4.0"

@@ -1,0 +1,46 @@
+# Configuration for Poland long-term rental dataset
+
+[dataset]
+name = "rental_poland_long"
+description = "Long-term rental listings in Poland"
+source = "in-repo"
+path = "data/parquet/rental_poland_long.parquet"
+
+# [hierarchy] - DEPRECATED: Now uses auto-detection
+# categorical_cols are auto-detected from DataFrame
+
+[target]
+column = "price_per_sqm"
+description = "Price per square meter in PLN"
+
+[features]
+numeric = ["area_sqm", "rooms"]
+categorical = ["city", "district", "region", "estate_type", "transaction_type"]
+
+[sce]
+aggregations = ["mean", "median", "std", "count", "q05", "q10", "q20", "q33", "q66", "q80", "q90", "q95"]
+min_group_size = 3
+use_cross_fitting = true
+n_folds = 5
+
+[model]
+type = "xgboost"
+n_estimators = 100
+max_depth = 6
+learning_rate = 0.1
+
+[run]
+xgboost_configs = ["shallow", "boosted", "default"]
+p_threshold = 0.05
+
+[run.search]
+sampling_pct = 5.0
+min_configs = 50
+max_configs = 500
+run_ablation = true
+run_significance_selection = true
+
+[run.lm_selection]
+enabled = true
+p_threshold = 0.05
+max_features = 100
