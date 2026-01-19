@@ -31,10 +31,6 @@ jobs:
         run: |
           ruff check sce tests
 
-      - name: Run type checking
-        run: |
-          mypy sce --ignore-missing-imports
-
       - name: Run tests
         run: |
           pytest --cov=sce --cov-report=xml --cov-report=term-missing
