@@ -1,0 +1,11 @@
+Strategy,Rental Poland Long,Rental Poland Short,Rental Uae Contracts,Sales Uae Transactions,Avg
+base_context,1.0,1.0,1.0,1.0,1.0
+base_context_sig_lm,,,2.0,2.0,2.0
+ablation_remove_worst_2,4.0,6.0,8.0,3.0,5.2
+ablation_remove_worst_1,12.0,2.0,4.0,6.0,6.0
+ablation_remove_worst_5,11.0,5.0,5.0,5.0,6.5
+base_context_sig_tree,10.0,3.0,6.0,9.0,7.0
+ablation_remove_worst_3,7.0,7.0,12.0,4.0,7.5
+base_context_all,5.0,4.0,3.0,23.0,8.8
+ablation_remove_worst_10,9.0,10.0,10.0,7.0,9.0
+baseline,2.0,20.0,9.0,8.0,9.8
