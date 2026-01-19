@@ -1,6 +1,6 @@
 """
 @module: sce.config
-@depends: 
+@depends:
 @exports: ContextConfig, AggregationMethod, detect_categorical_columns
 @paper_ref: Section 3.1
 @data_flow: user config -> validated parameters
@@ -8,7 +8,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional, Literal
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -16,20 +16,21 @@ if TYPE_CHECKING:
 
 class AggregationMethod(Enum):
     """Statistical aggregation methods for context features.
-    
+
     Paper Section 3.1: "means, medians, dispersion measures, quantiles,
     counts, and relative deviations"
     """
+
     # Central tendency
     MEAN = "mean"
     MEDIAN = "median"
-    
+
     # Dispersion measures
     STD = "std"
     VAR = "var"
     CV = "cv"  # Coefficient of variation (std/mean)
     IQR = "iqr"  # Interquartile range (Q75-Q25)
-    
+
     # Quantiles/Percentiles
     Q05 = "q05"  # 5th percentile
     Q10 = "q10"  # 10th percentile
@@ -41,12 +42,12 @@ class AggregationMethod(Enum):
     Q80 = "q80"  # 80th percentile
     Q90 = "q90"  # 90th percentile
     Q95 = "q95"  # 95th percentile
-    
+
     # Range
     MIN = "min"
     MAX = "max"
     RANGE = "range"  # max - min
-    
+
     # Counts
     COUNT = "count"
     SUM = "sum"
@@ -57,6 +58,7 @@ class CleanupConfig:
     """
     Configuration for feature cleanup pipeline.
     """
+
     leakage_enabled: bool = True
     leakage_remove_threshold: float = 0.95
     leakage_warn_threshold: float = 0.85
@@ -88,68 +90,68 @@ def detect_categorical_columns(
     target_col: str,
     max_cardinality: int = 100,
     min_cardinality: int = 2,
-    exclude_cols: Optional[List[str]] = None
+    exclude_cols: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Auto-detect categorical columns suitable for SCE grouping.
-    
+
     Detection rules:
     1. Object or category dtype → categorical
     2. Boolean dtype → categorical
     3. Integer with low cardinality (≤ max_cardinality) → likely categorical
     4. Exclude target column and any specified exclusions
     5. Exclude columns with only 1 unique value (no variance)
-    
+
     Args:
         df: Input DataFrame
         target_col: Target column name (will be excluded)
         max_cardinality: Maximum unique values for a column to be considered categorical
         min_cardinality: Minimum unique values (must have at least 2 groups)
         exclude_cols: Additional columns to exclude
-        
+
     Returns:
         List of detected categorical column names
-        
+
     Example:
         >>> categoricals = detect_categorical_columns(df, target_col="price")
         >>> print(categoricals)
         ['city', 'room_type', 'property_type', 'is_superhost']
     """
     import pandas as pd
-    
+
     exclude = set(exclude_cols or [])
     exclude.add(target_col)
-    
+
     categoricals = []
-    
+
     for col in df.columns:
         if col in exclude:
             continue
-            
+
         n_unique = df[col].nunique()
-        
+
         # Skip if no variance (only 1 unique value)
         if n_unique < min_cardinality:
             continue
-            
+
         # Skip if too many unique values (likely continuous or ID)
         if n_unique > max_cardinality:
             continue
-        
+
         dtype = df[col].dtype
-        
+
         # Object or category dtype → categorical
-        if dtype == 'object' or dtype.name == 'category':
+        if dtype == "object" or dtype.name == "category":
             categoricals.append(col)
         # Boolean → categorical
-        elif dtype == 'bool':
+        elif dtype == "bool":
             categoricals.append(col)
         # Low cardinality integer (likely encoded categorical)
         elif pd.api.types.is_integer_dtype(dtype):
             # Additional check: cardinality should be small relative to data size
             if n_unique <= max_cardinality and n_unique < len(df) * 0.1:
                 categoricals.append(col)
-    
+
     return categoricals
 
 
@@ -157,12 +159,12 @@ def detect_categorical_columns(
 class ContextConfig:
     """
     Configuration for Statistical Context Engineering.
-    
+
     Supports two modes:
     1. **Auto-detection mode** (recommended): Set `categorical_cols=None` and the engine
        will auto-detect categorical columns from the DataFrame.
     2. **Manual mode**: Specify `categorical_cols` explicitly.
-    
+
     Attributes:
         target_col: Name of the target variable column (REQUIRED)
         categorical_cols: List of categorical columns for grouping. If None, auto-detected.
@@ -183,14 +185,14 @@ class ContextConfig:
         exclude_cols: Columns to exclude from auto-detection
         add_backoff_depth: Whether to add backoff depth features
         cleanup_config: Optional feature cleanup configuration
-    
+
     Example (auto-detection):
         config = ContextConfig(
             target_col="price",
             include_interactions=True
         )
         # Categorical columns detected automatically from DataFrame
-        
+
     Example (manual):
         config = ContextConfig(
             target_col="price",
@@ -198,6 +200,7 @@ class ContextConfig:
             include_interactions=True
         )
     """
+
     target_col: str
     categorical_cols: Optional[List[str]] = None  # None = auto-detect
     min_categorical_columns: int = 1
@@ -226,11 +229,11 @@ class ContextConfig:
     exclude_cols: List[str] = field(default_factory=list)  # Exclude from auto-detection
     add_backoff_depth: bool = False
     cleanup_config: Optional[CleanupConfig] = None
-    
+
     # DEPRECATED: kept for backward compatibility
     hierarchy: Optional[List[str]] = None
     additional_categorical_cols: Optional[List[str]] = None
-    
+
     def __post_init__(self) -> None:
         """Validate configuration parameters."""
         if not self.target_col:
@@ -247,49 +250,53 @@ class ContextConfig:
             raise ValueError(
                 "fold_variance_features must be a subset of {'std','lower','upper','cv'}"
             )
-        
+
         # Backward compatibility: merge hierarchy + additional_categorical_cols into categorical_cols
         if self.hierarchy is not None:
             import warnings
+
             warnings.warn(
                 "ContextConfig.hierarchy is deprecated. Use categorical_cols instead. "
                 "All categorical columns are now treated equally (no ordered hierarchy).",
                 DeprecationWarning,
-                stacklevel=2
+                stacklevel=2,
             )
             if self.categorical_cols is None:
                 self.categorical_cols = list(self.hierarchy)
             else:
                 # Merge without duplicates
-                self.categorical_cols = list(dict.fromkeys(
-                    list(self.categorical_cols) + list(self.hierarchy)
-                ))
-        
+                self.categorical_cols = list(
+                    dict.fromkeys(list(self.categorical_cols) + list(self.hierarchy))
+                )
+
         if self.additional_categorical_cols is not None:
             import warnings
+
             warnings.warn(
                 "ContextConfig.additional_categorical_cols is deprecated. "
                 "Use categorical_cols instead.",
                 DeprecationWarning,
-                stacklevel=2
+                stacklevel=2,
             )
             if self.categorical_cols is None:
                 self.categorical_cols = list(self.additional_categorical_cols)
             else:
-                self.categorical_cols = list(dict.fromkeys(
-                    list(self.categorical_cols) + list(self.additional_categorical_cols)
-                ))
-    
+                self.categorical_cols = list(
+                    dict.fromkeys(
+                        list(self.categorical_cols) + list(self.additional_categorical_cols)
+                    )
+                )
+
     def get_categorical_cols(self, df: "pd.DataFrame") -> List[str]:
         """
         Get categorical columns for grouping.
-        
+
         If categorical_cols is None, auto-detects from DataFrame.
         Otherwise returns the specified columns (filtered to those that exist).
-        
+
         Args:
             df: Input DataFrame
-            
+
         Returns:
             List of categorical column names
         """
@@ -299,7 +306,7 @@ class ContextConfig:
                 df=df,
                 target_col=self.target_col,
                 max_cardinality=self.max_cardinality,
-                exclude_cols=self.exclude_cols
+                exclude_cols=self.exclude_cols,
             )
         else:
             # Manual: filter to columns that exist in df

@@ -34,12 +34,14 @@ def aggregate_importance(results: Iterable[SearchResult]) -> pd.DataFrame:
         if result.feature_importance is None or result.feature_importance.empty:
             continue
         for _, row in result.feature_importance.iterrows():
-            rows.append({
-                "feature": row["feature"],
-                "importance": float(row["importance"]),
-                "strategy": result.strategy,
-                "model_config": result.model_config,
-            })
+            rows.append(
+                {
+                    "feature": row["feature"],
+                    "importance": float(row["importance"]),
+                    "strategy": result.strategy,
+                    "model_config": result.model_config,
+                }
+            )
 
     if not rows:
         return pd.DataFrame()
@@ -49,23 +51,27 @@ def aggregate_importance(results: Iterable[SearchResult]) -> pd.DataFrame:
     agg_rows = []
     for feature, group in df.groupby("feature"):
         values = group["importance"].values
-        agg_rows.append({
-            "feature": feature,
-            "n_models": len(values),
-            "importance_mean": float(np.mean(values)),
-            "importance_std": float(np.std(values)),
-            "importance_min": float(np.min(values)),
-            "importance_p10": float(np.percentile(values, 10)),
-            "importance_p50": float(np.percentile(values, 50)),
-            "importance_p90": float(np.percentile(values, 90)),
-            "importance_max": float(np.max(values)),
-            "strategies": "|".join(sorted(group["strategy"].unique())),
-        })
+        agg_rows.append(
+            {
+                "feature": feature,
+                "n_models": len(values),
+                "importance_mean": float(np.mean(values)),
+                "importance_std": float(np.std(values)),
+                "importance_min": float(np.min(values)),
+                "importance_p10": float(np.percentile(values, 10)),
+                "importance_p50": float(np.percentile(values, 50)),
+                "importance_p90": float(np.percentile(values, 90)),
+                "importance_max": float(np.max(values)),
+                "strategies": "|".join(sorted(group["strategy"].unique())),
+            }
+        )
 
     aggregated = pd.DataFrame(agg_rows).sort_values("importance_mean", ascending=False)
 
     # Add per-strategy mean importance
-    strategy_means = df.groupby(["feature", "strategy"])["importance"].mean().unstack(fill_value=np.nan)
+    strategy_means = (
+        df.groupby(["feature", "strategy"])["importance"].mean().unstack(fill_value=np.nan)
+    )
     aggregated = aggregated.merge(strategy_means, on="feature", how="left")
 
     return aggregated
@@ -118,10 +124,12 @@ def run_iterative_pruning(
         )
 
         for feat in removed:
-            removed_records.append({
-                "feature": feat,
-                "removed_at_pct_keep": float(pct),
-            })
+            removed_records.append(
+                {
+                    "feature": feat,
+                    "removed_at_pct_keep": float(pct),
+                }
+            )
 
         current_features = kept
 

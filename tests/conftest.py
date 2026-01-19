@@ -2,11 +2,11 @@
 import sys
 from pathlib import Path
 
-import pytest
-import pandas as pd
 import numpy as np
+import pandas as pd
+import pytest
 
-from sce.config import ContextConfig, AggregationMethod
+from sce.config import AggregationMethod, ContextConfig
 
 # Add sce to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -17,7 +17,7 @@ def sample_data():
     """Create sample hierarchical data for testing."""
     np.random.seed(42)
     n = 100
-    
+
     cities = np.random.choice(["NYC", "LA", "CHI"], n)
     neighborhoods = []
     for city in cities:
@@ -27,14 +27,16 @@ def sample_data():
             neighborhoods.append(np.random.choice(["Hollywood", "Venice"], 1)[0])
         else:
             neighborhoods.append(np.random.choice(["Loop", "Lincoln"], 1)[0])
-    
-    df = pd.DataFrame({
-        "city": cities,
-        "neighborhood": neighborhoods,
-        "price": np.random.randint(100, 500, n),
-        "sqft": np.random.randint(500, 2000, n)
-    })
-    
+
+    df = pd.DataFrame(
+        {
+            "city": cities,
+            "neighborhood": neighborhoods,
+            "price": np.random.randint(100, 500, n),
+            "sqft": np.random.randint(500, 2000, n),
+        }
+    )
+
     return df
 
 
@@ -44,14 +46,10 @@ def basic_config():
     return ContextConfig(
         categorical_cols=["city", "neighborhood"],
         target_col="price",
-        aggregations=[
-            AggregationMethod.MEAN,
-            AggregationMethod.STD,
-            AggregationMethod.MEDIAN
-        ],
+        aggregations=[AggregationMethod.MEAN, AggregationMethod.STD, AggregationMethod.MEDIAN],
         min_group_size=3,
         use_cross_fitting=False,
-        n_folds=3
+        n_folds=3,
     )
 
 

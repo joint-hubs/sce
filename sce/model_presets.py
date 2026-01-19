@@ -94,7 +94,9 @@ def resolve_xgboost_presets(
             "max_depth": model_cfg.get("max_depth", presets["default"]["max_depth"]),
             "learning_rate": model_cfg.get("learning_rate", presets["default"]["learning_rate"]),
             "subsample": model_cfg.get("subsample", presets["default"].get("subsample", 0.8)),
-            "colsample_bytree": model_cfg.get("colsample_bytree", presets["default"].get("colsample_bytree", 0.8)),
+            "colsample_bytree": model_cfg.get(
+                "colsample_bytree", presets["default"].get("colsample_bytree", 0.8)
+            ),
         }
         return ["default"], presets
 

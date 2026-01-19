@@ -30,25 +30,25 @@ logger = logging.getLogger(__name__)
 @component(
     name="StatisticalContextEngine",
     responsibility="Core engine for categorical feature enrichment with auto-detection",
-    depends_on=["ContextConfig", "StatsAggregator"]
+    depends_on=["ContextConfig", "StatsAggregator"],
 )
 class StatisticalContextEngine(BaseEstimator, TransformerMixin):
     """
     Statistical Context Engineering transformer.
-    
+
     Implements Algorithm 1 from the paper: enriches datasets with statistical
     context features using out-of-fold aggregation to prevent leakage.
-    
+
     Supports auto-detection of categorical columns or manual specification.
-    
+
     Compatible with scikit-learn pipelines via fit/transform interface.
-    
+
     Example (auto-detection):
         >>> from sce import StatisticalContextEngine, ContextConfig
         >>> config = ContextConfig(target_col="price", use_cross_fitting=True)
         >>> engine = StatisticalContextEngine(config)
         >>> enriched_df = engine.fit_transform(train_df)  # Auto-detects categoricals
-        
+
     Example (manual):
         >>> config = ContextConfig(
         ...     target_col="price",
@@ -57,11 +57,11 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         >>> engine = StatisticalContextEngine(config)
         >>> enriched_df = engine.fit_transform(train_df)
     """
-    
+
     def __init__(self, config: ContextConfig):
         """
         Initialize the context engine.
-        
+
         Args:
             config: Configuration specifying target and aggregation settings
         """
@@ -72,27 +72,27 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         self._cleanup_pipeline: Optional[FeatureCleanupPipeline] = None
         self._cleanup_removed_features: Optional[List[str]] = None
         self._cleanup_report = None
-    
+
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "StatisticalContextEngine":
         """
         Fit the context engine (learn group statistics).
-        
+
         Implements Algorithm 1 Step 1: Compute group summaries.
         Auto-detects categorical columns if not specified in config.
-        
+
         Args:
             X: Input dataframe containing categorical columns and target
             y: Ignored (for sklearn compatibility)
-            
+
         Returns:
             self
-            
+
         Raises:
             ValueError: If required columns are missing
         """
         logger.debug(f"Fitting SCE engine on {len(X)} rows, {len(X.columns)} columns")
         self._validate_input(X)
-        
+
         # Get categorical columns (auto-detect or from config)
         self._categorical_cols = self.config.get_categorical_cols(X)
 
@@ -108,11 +108,15 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                 f"SCE requires at least {min_required} categorical columns after filtering. "
                 f"Found {len(self._categorical_cols)}."
             )
-        
+
         if self._categorical_cols:
-            logger.info(f"SCE using {len(self._categorical_cols)} categorical columns: {self._categorical_cols}")
-            print(f"  SCE using {len(self._categorical_cols)} categorical columns: {self._categorical_cols}")
-            
+            logger.info(
+                f"SCE using {len(self._categorical_cols)} categorical columns: {self._categorical_cols}"
+            )
+            print(
+                f"  SCE using {len(self._categorical_cols)} categorical columns: {self._categorical_cols}"
+            )
+
             # Log cardinality of each categorical column
             for col in self._categorical_cols:
                 if col in X.columns:
@@ -120,13 +124,17 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                     logger.debug(f"  Column '{col}': {unique_count} unique values")
         else:
             logger.warning("No categorical columns detected or specified")
-        
+
         # Compute statistics for all categorical columns
-        logger.debug(f"Computing aggregations with methods: {[m.value for m in self.config.aggregations]}")
-        logger.debug(f"min_group_size={self.config.min_group_size}, "
-                    f"include_interactions={self.config.include_interactions}, "
-                    f"max_interaction_depth={self.config.max_interaction_depth}")
-        
+        logger.debug(
+            f"Computing aggregations with methods: {[m.value for m in self.config.aggregations]}"
+        )
+        logger.debug(
+            f"min_group_size={self.config.min_group_size}, "
+            f"include_interactions={self.config.include_interactions}, "
+            f"max_interaction_depth={self.config.max_interaction_depth}"
+        )
+
         self._stats_dict = compute_aggregations(
             df=X,
             categorical_cols=self._categorical_cols,
@@ -135,43 +143,45 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
             min_group_size=self.config.min_group_size,
             include_global=self.config.include_global_stats,
             include_interactions=self.config.include_interactions,
-            max_interaction_depth=self.config.max_interaction_depth
+            max_interaction_depth=self.config.max_interaction_depth,
         )
-        
+
         logger.info(f"Computed statistics for {len(self._stats_dict)} hierarchy levels")
         for level_name, stats_df in self._stats_dict.items():
-            logger.debug(f"  Level '{level_name}': {len(stats_df)} groups, {len(stats_df.columns)} features")
-        
+            logger.debug(
+                f"  Level '{level_name}': {len(stats_df)} groups, {len(stats_df.columns)} features"
+            )
+
         self._fitted = True
         logger.debug("SCE engine fit complete")
         return self
-    
+
     def transform(self, X: pd.DataFrame) -> pd.DataFrame:
         """
         Transform dataframe by adding context features.
-        
+
         Implements Algorithm 1 Step 2: Join summaries to dataset.
-        
+
         Args:
             X: Input dataframe with categorical columns
-            
+
         Returns:
             Enriched dataframe with context features added
-            
+
         Raises:
             RuntimeError: If fit() has not been called
         """
         if not self._fitted or self._stats_dict is None:
             raise RuntimeError("Must call fit() before transform()")
-        
+
         logger.debug(f"Transforming {len(X)} rows")
         self._validate_input(X)
-        
+
         # Start with copy of input (preserves index)
         result = X.copy()
         original_index = X.index
         initial_col_count = len(result.columns)
-        
+
         # Join statistics for each categorical level
         for level_name, stats_df in self._stats_dict.items():
             logger.debug(f"Joining statistics for level '{level_name}'")
@@ -185,10 +195,12 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                 before_cols = len(result.columns)
                 result = self._join_level_stats(result, stats_df, group_cols, level_name)
                 added_cols = len(result.columns) - before_cols
-                logger.debug(f"  Level '{level_name}' (groups: {group_cols}): added {added_cols} features")
-        
-        features_before_backoff = len(result.columns)
-        
+                logger.debug(
+                    f"  Level '{level_name}' (groups: {group_cols}): added {added_cols} features"
+                )
+
+        len(result.columns)
+
         # Apply backoff for small groups (Paper Section 3.4)
         logger.debug("Applying hierarchical backoff for small groups")
         result = apply_hierarchical_backoff(
@@ -198,7 +210,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
             target_col=self.config.target_col,
             add_backoff_depth=self.config.add_backoff_depth,
         )
-        
+
         # Add relative features ONLY if explicitly enabled
         # WARNING: Relative features cause target leakage (use y_t in formula)
         if self.config.include_relative_features:
@@ -207,7 +219,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                 df=result,
                 stats_dict=self._stats_dict,
                 categorical_cols=self._categorical_cols,
-                target_col=self.config.target_col
+                target_col=self.config.target_col,
             )
         else:
             logger.debug("Relative features disabled (no target leakage)")
@@ -233,25 +245,25 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                     )
             if self._cleanup_removed_features:
                 result = result.drop(columns=self._cleanup_removed_features, errors="ignore")
-        
+
         # Ensure original index is preserved
         result.index = original_index
-        
+
         total_added = len(result.columns) - initial_col_count
         logger.info(f"Transform complete: added {total_added} enriched features")
-        
+
         return result
-    
+
     def fit_transform(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> pd.DataFrame:
         """
         Fit and transform in one step (with cross-fitting if enabled).
-        
+
         Implements Algorithm 1 with Equation 4 (out-of-fold aggregation).
-        
+
         Args:
             X: Input dataframe
             y: Ignored
-            
+
         Returns:
             Enriched dataframe with leakage-safe context features
         """
@@ -261,33 +273,33 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         else:
             # Standard fit-transform (may leak in-sample)
             return self.fit(X, y).transform(X)
-    
+
     def _fit_transform_cross_fitted(self, X: pd.DataFrame) -> pd.DataFrame:
         """
         Fit and transform using out-of-fold aggregation.
-        
+
         Implements Equation 4 from the paper:
             φ^(k)_{cf}(x_t) = S_k({y_s : s ∈ N_k(t) ∩ (indices \\ fold_m)})
-        
+
         Each fold gets statistics computed from all OTHER folds.
-        
+
         Args:
             X: Input dataframe
-            
+
         Returns:
             Enriched dataframe with out-of-fold context features
         """
         self._validate_input(X)
-        
+
         # Get categorical columns (auto-detect or from config)
         self._categorical_cols = self.config.get_categorical_cols(X)
-        
+
         # Store original index
         original_index = X.index
-        
+
         # Reset index to avoid duplicate index issues during concat
         X_reset = X.reset_index(drop=True)
-        
+
         kf = KFold(n_splits=self.config.n_folds, shuffle=True, random_state=42)
         fold_indices = list(kf.split(X_reset))
         fold_results = {}
@@ -346,13 +358,13 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
 
             for idx, row_idx in enumerate(val_idx):
                 fold_results[row_idx] = val_df.iloc[idx]
-        
+
         # Reconstruct in original order
         enriched = pd.DataFrame([fold_results[i] for i in range(len(X_reset))])
-        
+
         # Restore original index
         enriched.index = original_index
-        
+
         # Store final stats for future transform calls
         if self.config.include_fold_variance:
             self._stats_dict = self._aggregate_fold_statistics(
@@ -376,7 +388,10 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         if self.config.cleanup_config is not None:
             if self._cleanup_pipeline is None:
                 self._cleanup_pipeline = FeatureCleanupPipeline(self.config.cleanup_config)
-            if self._cleanup_removed_features is None and self.config.target_col in enriched.columns:
+            if (
+                self._cleanup_removed_features is None
+                and self.config.target_col in enriched.columns
+            ):
                 features = enriched.drop(columns=[self.config.target_col])
                 _, report = self._cleanup_pipeline.fit_transform(
                     features,
@@ -389,7 +404,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                 enriched = enriched.drop(columns=self._cleanup_removed_features, errors="ignore")
 
         return enriched
-    
+
     def _join_global_stats(self, df: pd.DataFrame, stats_df: pd.DataFrame) -> pd.DataFrame:
         """Broadcast global statistics to all rows."""
         result = df.copy()
@@ -409,7 +424,9 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
 
         result: Dict[str, pd.DataFrame] = {}
         for level_name in fold_stats_list[0].keys():
-            level_dfs = [fs.get(level_name) for fs in fold_stats_list if fs.get(level_name) is not None]
+            level_dfs = [
+                fs.get(level_name) for fs in fold_stats_list if fs.get(level_name) is not None
+            ]
             if not level_dfs:
                 continue
 
@@ -442,7 +459,9 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
             return pd.DataFrame()
 
         stat_cols = [c for c in level_dfs[0].columns if c not in group_cols]
-        all_groups = pd.concat([df[group_cols] for df in level_dfs], ignore_index=True).drop_duplicates()
+        all_groups = pd.concat(
+            [df[group_cols] for df in level_dfs], ignore_index=True
+        ).drop_duplicates()
         result = all_groups.copy()
 
         for stat_col in stat_cols:
@@ -519,39 +538,35 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                     result_data[f"{stat_col}_fold_upper"] = point + 2 * fold_std
 
         return pd.DataFrame([result_data])
-    
+
     def _join_level_stats(
-        self,
-        df: pd.DataFrame,
-        stats_df: pd.DataFrame,
-        group_cols: list[str],
-        level_name: str
+        self, df: pd.DataFrame, stats_df: pd.DataFrame, group_cols: list[str], level_name: str
     ) -> pd.DataFrame:
         """Join hierarchical statistics by group keys."""
         # Ensure join columns have compatible types
         df_joined = df.copy()
         stats_joined = stats_df.copy()
-        
+
         for col in group_cols:
             if col in df_joined.columns and col in stats_joined.columns:
                 df_joined[col] = df_joined[col].astype(str)
                 stats_joined[col] = stats_joined[col].astype(str)
-        
+
         # Rename stat columns with prefix
         stat_cols = [c for c in stats_joined.columns if c not in group_cols]
         rename_map = {c: f"{level_name}_{c}" for c in stat_cols}
         stats_joined = stats_joined.rename(columns=rename_map)
-        
+
         # Left join to preserve all input rows
         result = df_joined.merge(stats_joined, on=group_cols, how="left")
-        
+
         return result
-    
+
     def _validate_input(self, X: pd.DataFrame) -> None:
         """Validate input dataframe has required columns."""
         if self.config.target_col not in X.columns:
             raise ValueError(f"Missing target column: {self.config.target_col}")
-        
+
         # If categorical_cols specified manually, check they exist
         if self.config.categorical_cols is not None:
             missing_cols = [c for c in self.config.categorical_cols if c not in X.columns]

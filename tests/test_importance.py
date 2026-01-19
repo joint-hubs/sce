@@ -7,10 +7,12 @@ from sce.search import SearchResult
 
 
 def test_aggregate_importance_basic():
-    importance = pd.DataFrame({
-        "feature": ["a", "b"],
-        "importance": [0.7, 0.3],
-    })
+    importance = pd.DataFrame(
+        {
+            "feature": ["a", "b"],
+            "importance": [0.7, 0.3],
+        }
+    )
     result = SearchResult(
         config_id=0,
         strategy="baseline",

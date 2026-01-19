@@ -5,7 +5,6 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 [![Tests](https://github.com/joint-hubs/sce/actions/workflows/ci.yml/badge.svg)](https://github.com/joint-hubs/sce/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/joint-hubs/sce/branch/main/graph/badge.svg)](https://codecov.io/gh/joint-hubs/sce)
 
 ---
 
@@ -208,20 +207,6 @@ sce/
 
 ---
 
-## Citation
-
-If you use SCE in your research, please cite:
-
-```bibtex
-@inproceedings{sce2025,
-  title={Statistical Context Engineering: Hierarchical Feature Enrichment for Regression},
-  author={Stachowicz, Mateusz and Halkiewicz, Stanisław},
-  booktitle={Proceedings of the 42nd International Conference on Machine Learning},
-  year={2025}
-}
-```
-
----
 
 ## License
 

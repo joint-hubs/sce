@@ -10,10 +10,9 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-import pytest
 import pandas as pd
 import pandas.api.types as ptypes
-
+import pytest
 
 PROJECT_ROOT = Path(__file__).parent.parent
 MANIFEST_PATH = PROJECT_ROOT / "data" / "manifests" / "checksums.txt"

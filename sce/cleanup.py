@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class CleanupReport:
     """Report of cleanup operations performed."""
+
     original_features: int
     final_features: int
     constant_removed: List[str] = field(default_factory=list)
