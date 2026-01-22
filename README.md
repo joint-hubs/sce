@@ -1,34 +1,36 @@
 # Statistical Context Engineering (SCE)
 
-> **Hierarchical Feature Enrichment for Regression Models**
+**Hierarchical feature enrichment for regression with leakage-safe cross-fitting**
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 [![Tests](https://github.com/joint-hubs/sce/actions/workflows/ci.yml/badge.svg)](https://github.com/joint-hubs/sce/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/stat-context.svg)](https://pypi.org/project/stat-context/)
 
 ---
 
-## What is SCE?
+## Overview
 
-**Statistical Context Engineering** enriches regression datasets with hierarchical statistical features. By aggregating target statistics at multiple levels of granularity (e.g., country → region → city → neighborhood), SCE provides models with powerful contextual information while preventing data leakage through cross-fitting.
+Statistical Context Engineering (SCE) is a Python library for enriching tabular regression datasets with hierarchical statistical features. The method computes target-variable aggregations at multiple levels of categorical granularity (e.g., region → city → neighborhood) while preventing information leakage through k-fold cross-fitting.
 
-### Key Features
+The approach is grounded in Bayesian estimation principles and cooperative game theory, providing a principled framework for incorporating group-level context into predictive models.
 
-- 🎯 **Leakage-Safe**: Out-of-fold aggregation prevents test set contamination
-- 🔍 **Auto-Detection**: Categorical columns detected automatically from your DataFrame
-- 🏗️ **Hierarchical**: Captures context at multiple granularity levels + interactions
-- 🔌 **Scikit-learn Compatible**: Drop-in transformer for existing pipelines
-- 📊 **Theory-Backed**: Grounded in Bayesian estimation and cooperative game theory
-- ⚡ **Production-Ready**: Typed, tested, and documented
+### Features
+
+- **Leakage prevention**: Out-of-fold aggregation ensures no target information from the test set contaminates training features
+- **Automatic detection**: Categorical columns are inferred from DataFrame dtypes when not explicitly specified
+- **Hierarchical aggregation**: Captures statistical context at multiple granularity levels, including cross-column interactions
+- **Scikit-learn compatibility**: Implements the transformer interface for seamless pipeline integration
+- **Uncertainty quantification**: Cross-fitting provides fold-variance estimates for context features
 
 ---
 
 ## Installation
 
-### From PyPI (Recommended)
+### From PyPI
 
 ```bash
-pip install sce
+pip install stat-context
 ```
 
 ### From Source
@@ -39,137 +41,58 @@ cd sce
 pip install -e .
 ```
 
-### With Optional Dependencies
+### Optional Dependencies
 
 ```bash
-pip install sce[dev]   # Development tools
-pip install sce[data]  # Remote dataset fetching
-pip install sce[viz]   # Visualization tools
-pip install sce[all]   # Everything
+pip install stat-context[dev]   # Development and testing tools
+pip install stat-context[data]  # Remote dataset fetching
+pip install stat-context[all]   # All optional dependencies
 ```
 
 ---
 
-## Quick Start
+## Usage
+
+### Basic Example
 
 ```python
 from sce import StatisticalContextEngine, ContextConfig, AggregationMethod
-from xgboost import XGBRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
+from xgboost import XGBRegressor
 import pandas as pd
 
-# Load your data
+# Load data
 df = pd.read_csv("rental_data.csv")
+X = df.drop(columns=["price"])
+y = df["price"]
 
-# Configure SCE (categorical columns auto-detected!)
+# Configure the context engine
 config = ContextConfig(
     target_col="price",
     aggregations=[AggregationMethod.MEAN, AggregationMethod.STD],
-    use_cross_fitting=True,  # Prevents leakage
+    use_cross_fitting=True,
     n_folds=5
 )
 
-# Create pipeline
+# Build pipeline
 pipeline = Pipeline([
     ("sce", StatisticalContextEngine(config)),
     ("model", XGBRegressor(n_estimators=100))
 ])
 
-# Train
-X = df.drop(columns=["price"])
-y = df["price"]
+# Train and predict
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 pipeline.fit(X_train, y_train)
-
-# Predict
 predictions = pipeline.predict(X_test)
 ```
 
-### Manual Column Specification (Optional)
+### Explicit Column Specification
 
 ```python
 config = ContextConfig(
     target_col="price",
     categorical_cols=["country", "region", "city", "neighborhood"],
-    aggregations=[AggregationMethod.MEAN, AggregationMethod.STD],
-    use_cross_fitting=True
-)
-```
-
----
-
-## How It Works
-
-SCE computes statistical summaries of the target variable within hierarchical groups:
-
-1. **Define Hierarchies**: Categorical columns form a natural hierarchy (e.g., `city` → `neighborhood`)
-2. **Compute Statistics**: For each group, compute mean, std, median, quantiles, etc.
-3. **Cross-Fitting**: Use out-of-fold aggregation to prevent leakage
-4. **Enrich Features**: Append context features to original dataset
-
-```
-Original: [city, beds, sqft]
-Enriched: [city, beds, sqft, city_mean, city_std, city_count, ...]
-```
-
----
-
-## Datasets
-
-Four real-world datasets are included for benchmarking:
-
-| Dataset | Domain | Samples | Hierarchy Levels | Location |
-|---------|--------|---------|------------------|----------|
-| `rental_poland_short` | Short-term rentals | 12,847 | 4 | In-repo |
-| `rental_poland_long` | Long-term rentals | 28,391 | 4 | In-repo |
-| `rental_uae_contracts` | Dubai rental contracts | 156,203 | 3 | Remote |
-| `sales_uae_transactions` | Dubai property sales | 89,456 | 3 | Remote |
-
-Remote datasets download automatically on first use.
-
-```python
-from sce.io import load_dataset
-
-df = load_dataset("rental_poland_short")  # Local
-df = load_dataset("rental_uae_contracts")  # Auto-downloads
-```
-
----
-
-## Reproducing Paper Results
-
-```bash
-# Run all experiments
-python scripts/run.py --all
-
-# Run specific dataset
-python scripts/run.py --dataset rental_uae_contracts
-
-# Run comprehensive search
-python scripts/run.py --dataset rental_uae_contracts --search
-
-# Generate paper figures
-python scripts/generate_paper_appendix_figures.py
-```
-
-Results are saved to `results/` with metrics, visualizations, and detailed reports.
-
----
-
-## Configuration Reference
-
-```python
-from sce import ContextConfig, AggregationMethod
-
-config = ContextConfig(
-    # Required
-    target_col="price",
-    
-    # Categorical detection (auto if not specified)
-    categorical_cols=None,  # Auto-detect from DataFrame
-    
-    # Aggregations to compute
     aggregations=[
         AggregationMethod.MEAN,
         AggregationMethod.MEDIAN,
@@ -178,51 +101,161 @@ config = ContextConfig(
         AggregationMethod.Q75,
         AggregationMethod.COUNT
     ],
-    
-    # Leakage prevention
-    use_cross_fitting=True,  # Always True for training
+    use_cross_fitting=True,
     n_folds=5,
-    
-    # Advanced
-    min_group_size=5,           # Minimum samples per group
-    include_global_stats=True,  # Dataset-wide statistics
-    include_interactions=False, # Cross-column hierarchies
+    min_group_size=5,
+    include_global_stats=True,
+    include_interactions=True
 )
 ```
 
 ---
 
-## Architecture
+## Method
+
+SCE operates in four stages:
+
+1. **Hierarchy identification**: Categorical columns define grouping levels (e.g., `city`, `neighborhood`)
+2. **Statistical aggregation**: For each group, compute configurable statistics (mean, std, quantiles, etc.)
+3. **Cross-fitting**: K-fold out-of-fold aggregation prevents target leakage during training
+4. **Feature enrichment**: Context features are appended to the original feature matrix
+
+The transformation extends the feature space as follows:
 
 ```
-sce/
-├── engine.py       # StatisticalContextEngine (core transformer)
-├── config.py       # Configuration dataclasses
-├── stats.py        # Statistical aggregators
-├── pipeline.py     # Scikit-learn pipeline utilities
-├── cleanup.py      # Feature cleanup and NaN handling
-├── importance.py   # Feature importance analysis
-└── io/             # Dataset loading utilities
+Input:    [city, beds, sqft]
+Output:   [city, beds, sqft, city_mean, city_std, city_count, ...]
+```
+
+During inference, aggregations are computed from the full training set without cross-fitting.
+
+---
+
+## Datasets
+
+Four benchmark datasets are provided for reproducibility:
+
+| Dataset | Domain | Samples | Hierarchy Depth |
+|---------|--------|---------|------------------|
+| `rental_poland_short` | Short-term rentals (Airbnb) | 12,847 | 4 |
+| `rental_poland_long` | Long-term rentals (Otodom) | 28,391 | 4 |
+| `rental_uae_contracts` | Dubai rental contracts | 156,203 | 3 |
+| `sales_uae_transactions` | Dubai property sales | 89,456 | 3 |
+
+```python
+from sce.io import load_dataset
+
+df = load_dataset("rental_poland_short")   # Bundled with package
+df = load_dataset("rental_uae_contracts")  # Downloaded on first use
 ```
 
 ---
 
+## Experimental Results
+
+Experiments compare baseline models (XGBoost with original features) against SCE-enriched models using comprehensive hyperparameter search.
+
+| Dataset | Baseline RMSE | +SCE RMSE | RMSE Reduction | R² Change |
+|---------|---------------|-----------|----------------|------------|
+| Airbnb Poland | 27,368 | 22,541 | 17.6% | +24.49 pp |
+| Dubai Rentals | 465,037 | 360,267 | 22.5% | +3.83 pp |
+| Dubai Transactions | 32,489,660 | 26,353,228 | 18.9% | +25.83 pp |
+| Otodom Poland | 4,581 | 4,541 | 0.9% | +1.55 pp |
+
+Results vary by dataset characteristics. The method shows larger improvements on datasets with informative categorical hierarchies and sufficient group sizes. See the `results/` directory for detailed experimental outputs.
+
+---
+
+## Reproducing Experiments
+
+```bash
+# Run experiments on all datasets
+python scripts/run.py --all --search
+
+# Run on a specific dataset
+python scripts/run.py --dataset rental_uae_contracts --search
+
+# Generate figures and tables
+python scripts/generate_figures.py
+python scripts/generate_paper_appendix_figures.py
+```
+
+---
+
+## API Reference
+
+### ContextConfig
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target_col` | `str` | Required | Name of the target variable column |
+| `categorical_cols` | `list[str]` | `None` | Columns to aggregate over (auto-detected if None) |
+| `aggregations` | `list[AggregationMethod]` | `[MEAN, STD]` | Statistics to compute |
+| `use_cross_fitting` | `bool` | `True` | Enable out-of-fold aggregation |
+| `n_folds` | `int` | `5` | Number of cross-fitting folds |
+| `min_group_size` | `int` | `5` | Minimum samples required per group |
+| `include_global_stats` | `bool` | `True` | Include dataset-wide statistics |
+| `include_interactions` | `bool` | `False` | Include cross-column hierarchies |
+
+### StatisticalContextEngine
+
+```python
+class StatisticalContextEngine(BaseEstimator, TransformerMixin):
+    def __init__(self, config: ContextConfig): ...
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> Self: ...
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame: ...
+    def fit_transform(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame: ...
+```
+
+---
+
+## Package Structure
+
+```
+sce/
+├── engine.py       # StatisticalContextEngine transformer
+├── config.py       # ContextConfig and AggregationMethod
+├── stats.py        # Aggregation functions
+├── pipeline.py     # Pipeline utilities
+├── cleanup.py      # NaN handling and feature cleanup
+├── importance.py   # Feature importance analysis
+└── io/             # Dataset loading
+```
+
+---
 
 ## License
 
-- **Academic/Research Use**: [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/) (free)
-- **Commercial Use**: Contact authors for licensing
+This software is released under the [Creative Commons Attribution-NonCommercial 4.0 International License](https://creativecommons.org/licenses/by-nc/4.0/).
+
+- **Academic and research use**: Permitted with attribution
+- **Commercial use**: Requires a separate license agreement
+
+---
+
+## Citation
+
+If you use this software in your research, please cite:
+
+```bibtex
+@inproceedings{sce2026,
+  title={Statistical Context Engineering: Hierarchical Feature Enrichment for Regression},
+  author={[Authors]},
+  booktitle={Proceedings of the International Conference on Machine Learning},
+  year={2026}
+}
+```
 
 ---
 
 ## Contributing
 
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, and pull request procedures.
 
 ---
 
 ## Links
 
-- 📖 [Documentation](https://github.com/joint-hubs/sce#readme)
-- 🐛 [Issue Tracker](https://github.com/joint-hubs/sce/issues)
-- 💬 [Discussions](https://github.com/joint-hubs/sce/discussions)
+- [Source Code](https://github.com/joint-hubs/sce)
+- [Issue Tracker](https://github.com/joint-hubs/sce/issues)
+- [Documentation](https://github.com/joint-hubs/sce#readme)
