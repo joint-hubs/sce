@@ -239,8 +239,8 @@ If you use this software in your research, please cite:
 
 ```bibtex
 @inproceedings{sce2026,
-  title={Statistical Context Engineering: Hierarchical Feature Enrichment for Regression},
-  author={[Authors]},
+  title={Statistical Context Engineering for Hierarchical Tabular Data},
+  author={Stachowicz, Mateusz and Halkiewicz, Stanis{\l}aw},
   booktitle={Proceedings of the International Conference on Machine Learning},
   year={2026}
 }
