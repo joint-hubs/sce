@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sce"
-version = "0.3.0"
+name = "stat-context"
+version = "0.3.1"
 description = "Statistical Context Engineering: Hierarchical feature enrichment for regression models"
 readme = "README.md"
 license = {text = "CC BY-NC 4.0"}
