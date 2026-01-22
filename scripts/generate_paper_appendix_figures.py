@@ -3,7 +3,7 @@
 @module: scripts.generate_paper_appendix_figures
 @depends: results/*/data/*.csv
 @exports: Main paper + appendix figures
-@paper_ref: Figures B1, B2, B4, Appendix A1-A6
+@paper_ref: Figures B1, B2, B4, Appendix A1-A6, Tables 1-2
 @data_flow: per-run csv -> matplotlib figures -> PDF/PNG
 
 Generates consolidated main-paper figures and per-dataset appendix figures.
@@ -12,12 +12,14 @@ Generates consolidated main-paper figures and per-dataset appendix figures.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import tomllib
 
 plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams.update({
@@ -42,24 +44,58 @@ COLORS = {
     "accent": "#7B1FA2",
 }
 
+# SCE feature suffixes - must match all aggregation methods from sce.config.AggregationMethod
+# plus fold variance features from cross-fitting
 SCE_SUFFIXES = (
+    # Central tendency
     "_mean",
     "_median",
+    # Dispersion measures
     "_std",
-    "_count",
-    "_ratio_to_general",
-    "_p25",
-    "_p75",
-    "_p90",
-    "_p10",
+    "_var",
+    "_cv",
+    "_iqr",
+    # Quantiles/Percentiles (must match AggregationMethod enum values)
+    "_q05",
+    "_q10",
+    "_q20",
+    "_q25",
+    "_q33",
+    "_q66",
+    "_q75",
+    "_q80",
+    "_q90",
+    "_q95",
+    # Range
     "_min",
     "_max",
     "_range",
+    # Counts
+    "_count",
+    "_sum",
+    # Relative deviations
+    "_ratio_to_general",
+    # Fold variance features from cross-fitting (leakage-safe uncertainty)
+    "_fold_std",
+    "_fold_lower",
+    "_fold_upper",
 )
 
 
 def is_sce_feature(feature_name: str) -> bool:
-    return any(feature_name.endswith(suffix) for suffix in SCE_SUFFIXES)
+    """Check if feature is an SCE-generated context feature.
+    
+    Handles both simple suffixes (e.g., _mean) and compound suffixes
+    (e.g., _q10_fold_lower for cross-fitting quantile features).
+    """
+    # First check simple suffix match
+    if any(feature_name.endswith(suffix) for suffix in SCE_SUFFIXES):
+        return True
+    # Also check for fold variance on quantile features (e.g., _q10_fold_lower)
+    for suffix in ("_fold_std", "_fold_lower", "_fold_upper"):
+        if suffix in feature_name:
+            return True
+    return False
 
 
 def format_dataset(name: str) -> str:
@@ -69,7 +105,7 @@ def format_dataset(name: str) -> str:
 def fmt_num(val: float, decimals: int = 2) -> str:
     """Format number with commas and specified decimal places."""
     if pd.isna(val):
-        return "—"
+        return ""
     return f"{val:,.{decimals}f}"
 
 
@@ -87,7 +123,7 @@ def discover_run_dirs(results_root: Path) -> list[Path]:
     ])
 
 
-def load_run_artifacts(run_dir: Path) -> dict[str, Any]:
+def load_run_artifacts(run_dir: Path, configs_root: Path | None = None) -> dict[str, Any]:
     data_dir = run_dir / "data"
     dataset = run_dir.name.split("_search_")[0]
     artifacts = {
@@ -97,6 +133,17 @@ def load_run_artifacts(run_dir: Path) -> dict[str, Any]:
         "best_by_strategy": pd.read_csv(data_dir / "best_by_strategy.csv"),
         "feature_importance": pd.read_csv(data_dir / "aggregated_feature_importance.csv"),
     }
+    # Load metadata
+    metadata_path = data_dir / "metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, "r") as f:
+            artifacts["metadata"] = json.load(f)
+    # Load config for hierarchy info
+    if configs_root:
+        config_path = configs_root / f"{dataset}.toml"
+        if config_path.exists():
+            with open(config_path, "rb") as f:
+                artifacts["config"] = tomllib.load(f)
     pruning_path = data_dir / "xgb_pruning_trace.csv"
     if pruning_path.exists():
         artifacts["pruning"] = pd.read_csv(pruning_path)
@@ -217,40 +264,49 @@ def plot_m3_strategy_ranking(runs: list[dict[str, Any]], output_base: Path) -> N
     csv_df.index.name = "Strategy"
     csv_df.to_csv(output_base.with_name(f"{output_base.name}_table.csv"))
 
-    # Create heatmap figure
-    fig, ax = plt.subplots(figsize=(8, 5))
-    heatmap_data = pivot.values.astype(float)
-    im = ax.imshow(heatmap_data, cmap="RdYlGn_r", aspect="auto")
+    # Create heatmap figure - use plain style to avoid any grid
+    with plt.style.context('default'):
+        fig, ax = plt.subplots(figsize=(8, 5))
+        heatmap_data = pivot.values.astype(float)
+        im = ax.imshow(heatmap_data, cmap="RdYlGn_r", aspect="auto")
 
-    # Set ticks
-    ax.set_xticks(np.arange(len(pivot.columns)))
-    ax.set_yticks(np.arange(len(pivot.index)))
+        # Remove all grid lines, ticks, and spines
+        ax.set_xticks(np.arange(len(pivot.columns)))
+        ax.set_yticks(np.arange(len(pivot.index)))
+        ax.tick_params(length=0, which='both')  # Remove tick marks
+        ax.grid(False)  # Explicitly disable grid
+        ax.set_xticks(np.arange(len(pivot.columns)) - 0.5, minor=True)
+        ax.set_yticks(np.arange(len(pivot.index)) - 0.5, minor=True)
+        ax.tick_params(which='minor', length=0)
+        ax.grid(False, which='minor')
+        for spine in ax.spines.values():
+            spine.set_visible(False)
 
-    # Shorten dataset labels for x-axis
-    short_labels = [c.replace("Rental ", "").replace("Sales ", "") if c != "Avg" else c for c in pivot.columns]
-    ax.set_xticklabels(short_labels, fontsize=9, rotation=30, ha="right")
-    ax.set_yticklabels(pivot.index, fontsize=9)
+        # Shorten dataset labels for x-axis
+        short_labels = [c.replace("Rental ", "").replace("Sales ", "") if c != "Avg" else c for c in pivot.columns]
+        ax.set_xticklabels(short_labels, fontsize=9, rotation=30, ha="right")
+        ax.set_yticklabels(pivot.index, fontsize=9)
 
-    # Add text annotations
-    for i in range(len(pivot.index)):
-        for j in range(len(pivot.columns)):
-            val = heatmap_data[i, j]
-            if not np.isnan(val):
-                text_color = "white" if val > 6 else "black"
-                ax.text(j, i, f"{val:.1f}", ha="center", va="center", color=text_color, fontsize=9)
+        # Add text annotations (integers, no decimals)
+        for i in range(len(pivot.index)):
+            for j in range(len(pivot.columns)):
+                val = heatmap_data[i, j]
+                if not np.isnan(val):
+                    text_color = "white" if val > 6 else "black"
+                    ax.text(j, i, f"{int(round(val))}", ha="center", va="center", color=text_color, fontsize=9)
 
-    ax.set_title("Strategy Ranking Heatmap (Lower is Better)", fontweight="bold", pad=10)
-    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label("Rank")
-    fig.tight_layout()
-    save_figure(fig, output_base)
+        ax.set_title("Strategy Ranking Heatmap (Lower is Better)", fontweight="bold", pad=10)
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label("Rank")
+        fig.tight_layout()
+        save_figure(fig, output_base)
 
 
-def save_table_figure(df: pd.DataFrame, output_base: Path, title: str) -> None:
+def save_table_figure(df: pd.DataFrame, output_base: Path, title: str = "") -> None:
     n_cols = len(df.columns)
     n_rows = len(df)
     fig_width = max(6, 1.0 * n_cols)
-    fig_height = max(2, 0.4 * n_rows + 0.8)
+    fig_height = max(2, 0.4 * n_rows + 0.6)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     ax.axis("off")
     table = ax.table(
@@ -263,9 +319,133 @@ def save_table_figure(df: pd.DataFrame, output_base: Path, title: str) -> None:
     table.set_fontsize(9)
     table.auto_set_column_width(col=list(range(n_cols)))
     table.scale(1, 1.4)
-    ax.set_title(title, fontweight="bold", pad=15)
+    # No title for cleaner table-only output
     fig.tight_layout()
     save_figure(fig, output_base)
+
+
+# Dataset display name mapping
+DATASET_DISPLAY_NAMES = {
+    "rental_uae_contracts": "Dubai Rentals",
+    "sales_uae_transactions": "Dubai Transactions",
+    "rental_poland_short": "Airbnb Poland",
+    "rental_poland_long": "Otodom Poland",
+}
+
+
+def generate_table1_dataset_overview(runs: list[dict[str, Any]], output_base: Path) -> None:
+    """Generate Table 1: Dataset overview with feature counts from real data."""
+    rows = []
+    for r in runs:
+        dataset = r["dataset"]
+        display_name = DATASET_DISPLAY_NAMES.get(dataset, format_dataset(dataset))
+        meta = r.get("metadata", {})
+        config = r.get("config", {})
+        
+        n_samples = meta.get("n_samples", 0)
+        n_base = meta.get("n_base_features", 0)
+        n_context = meta.get("n_context_features", 0)
+        n_total = n_base + n_context
+        
+        # Hierarchy columns = categorical features from config
+        cat_cols = config.get("features", {}).get("categorical", [])
+        n_hier = len(cat_cols)
+        
+        rows.append({
+            "Dataset": display_name,
+            "n": f"{n_samples:,}",
+            "#Hier. cols": n_hier,
+            "Base feats": n_base,
+            "+SCE feats": n_total,
+        })
+    
+    # Sort by display name for consistent ordering
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Dataset").reset_index(drop=True)
+    
+    # Save as CSV
+    df.to_csv(output_base.with_suffix(".csv"), index=False)
+    
+    # Save as figure
+    save_table_figure(df, output_base, "Table 1: Dataset Overview")
+    
+    # Also generate LaTeX
+    latex_lines = [
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r'\caption{Dataset overview. "Base" refers to the baseline feature set; "+SCE" refers to the best-performing SCE-enhanced configuration.}',
+        r"\label{tab:datasets}",
+        r"\begin{tabular}{lrrrr}",
+        r"\toprule",
+        r"Dataset & $n$ & \#Hier. cols & Base feats & +SCE feats \\",
+        r"\midrule",
+    ]
+    for _, row in df.iterrows():
+        latex_lines.append(f"{row['Dataset']} & {row['n']} & {row['#Hier. cols']} & {row['Base feats']} & {row['+SCE feats']} \\\\")
+    latex_lines.extend([
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+    ])
+    with open(output_base.with_suffix(".tex"), "w", encoding="utf-8") as f:
+        f.write("\n".join(latex_lines))
+
+
+def generate_table2_accuracy_summary(runs: list[dict[str, Any]], output_base: Path) -> None:
+    """Generate Table 2: Summary accuracy results from real experiment data."""
+    rows = []
+    for r in runs:
+        dataset = r["dataset"]
+        display_name = DATASET_DISPLAY_NAMES.get(dataset, format_dataset(dataset))
+        baseline, sce = best_baseline_and_sce(r["model_comparison"])
+        
+        baseline_rmse = baseline["rmse"]
+        sce_rmse = sce["rmse"]
+        baseline_r2 = baseline["r2"]
+        sce_r2 = sce["r2"]
+        
+        delta_rmse_pct = (baseline_rmse - sce_rmse) / baseline_rmse * 100
+        delta_r2_pp = (sce_r2 - baseline_r2) * 100  # percentage points
+        
+        rows.append({
+            "Dataset": display_name,
+            "Baseline RMSE": fmt_num(baseline_rmse, 0),
+            "+SCE RMSE": fmt_num(sce_rmse, 0),
+            "ΔRMSE": f"↓ {delta_rmse_pct:.1f}%" if delta_rmse_pct > 0 else f"↑ {-delta_rmse_pct:.1f}%",
+            "ΔR²": f"+{delta_r2_pp:.2f} pp" if delta_r2_pp >= 0 else f"{delta_r2_pp:.2f} pp",
+        })
+    
+    df = pd.DataFrame(rows)
+    df = df.sort_values("Dataset").reset_index(drop=True)
+    
+    # Save as CSV
+    df.to_csv(output_base.with_suffix(".csv"), index=False)
+    
+    # Save as figure
+    save_table_figure(df, output_base, "Table 2: Summary Accuracy Results")
+    
+    # Also generate LaTeX
+    latex_lines = [
+        r"\begin{table}[htbp]",
+        r"\centering",
+        r"\caption{Summary accuracy results across datasets (lower RMSE is better).}",
+        r"\label{tab:results}",
+        r"\begin{tabular}{lrrrr}",
+        r"\toprule",
+        r"Dataset & Baseline RMSE & +SCE RMSE & $\Delta$RMSE & $\Delta R^2$ \\",
+        r"\midrule",
+    ]
+    for _, row in df.iterrows():
+        # Use LaTeX arrows for the table
+        delta_rmse = row['ΔRMSE'].replace('↓', r'$\downarrow$').replace('↑', r'$\uparrow$')
+        latex_lines.append(f"{row['Dataset']} & {row['Baseline RMSE']} & {row['+SCE RMSE']} & {delta_rmse} & {row['ΔR²']} \\\\")
+    latex_lines.extend([
+        r"\bottomrule",
+        r"\end{tabular}",
+        r"\end{table}",
+    ])
+    with open(output_base.with_suffix(".tex"), "w", encoding="utf-8") as f:
+        f.write("\n".join(latex_lines))
 
 
 def plot_a1_baseline_vs_sce(run: dict[str, Any], output_base: Path) -> None:
@@ -320,10 +500,10 @@ def plot_a4_ablation_curve(run: dict[str, Any], output_base: Path) -> None:
         return
     df = run["pruning"].sort_values("n_features")
     fig, ax = plt.subplots(figsize=(4.5, 3))
-    ax.plot(df["n_features"], df["rmse"], marker="o", color=COLORS["accent"], linewidth=1.5)
+    ax.scatter(df["n_features"], df["rmse"], color=COLORS["accent"], s=50, alpha=0.8, edgecolors="white", linewidths=0.5)
     ax.set_xlabel("# Features")
     ax.set_ylabel("RMSE")
-    ax.set_title(f"{format_dataset(run['dataset'])}: Ablation Curve", fontweight="bold")
+    ax.set_title(f"{format_dataset(run['dataset'])}: Feature Ablation", fontweight="bold")
     save_figure(fig, output_base)
 
 
@@ -358,9 +538,11 @@ def plot_a6_complexity_vs_rmse(run: dict[str, Any], output_base: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate main paper + appendix figures")
     parser.add_argument("--results-root", type=Path, default=Path(__file__).parent.parent / "results")
+    parser.add_argument("--configs-root", type=Path, default=Path(__file__).parent.parent / "configs")
     parser.add_argument("--output-root", type=Path, default=Path(__file__).parent.parent.parent / "docs" / "figures")
     parser.add_argument("--paper-only", action="store_true", help="Only generate main paper figures")
     parser.add_argument("--appendix-only", action="store_true", help="Only generate appendix figures")
+    parser.add_argument("--tables-only", action="store_true", help="Only generate Table 1 and Table 2 figures")
     parser.add_argument("--dataset", type=str, default=None, help="Limit to a specific dataset")
     args = parser.parse_args()
 
@@ -368,12 +550,20 @@ def main() -> None:
     if args.dataset:
         run_dirs = [d for d in run_dirs if d.name.startswith(args.dataset)]
 
-    runs = [load_run_artifacts(d) for d in run_dirs]
+    runs = [load_run_artifacts(d, args.configs_root) for d in run_dirs]
     if not runs:
         raise SystemExit("No run directories found for figure generation.")
 
     paper_dir = args.output_root / "paper"
     appendix_dir = args.output_root / "appendix"
+
+    # Generate tables (unless --appendix-only is set)
+    if not args.appendix_only:
+        generate_table1_dataset_overview(runs, paper_dir / "paper_table1_dataset_overview")
+        generate_table2_accuracy_summary(runs, paper_dir / "paper_table2_accuracy_summary")
+
+    if args.tables_only:
+        return
 
     if not args.appendix_only:
         plot_m1_rmse_improvement(runs, paper_dir / "paper_m1_rmse_improvement")

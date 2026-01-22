@@ -246,7 +246,7 @@ def generate_summary_table(results: list[dict], output_path: Path) -> None:
     
     latex_lines.extend([
         r"\midrule",
-        f"\\textbf{{Average}} & -- & -- & \\textbf{{+{avg_rmse_impr:.1f}\\%}} \\\\",
+        f"\\textbf{{Average}} & & & \\textbf{{+{avg_rmse_impr:.1f}\\%}} \\\\",
         r"\bottomrule",
         r"\end{tabular}",
         r"\end{table}",
