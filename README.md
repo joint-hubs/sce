@@ -135,12 +135,12 @@ During inference, aggregations are computed from the full training set without c
 
 Four benchmark datasets are provided for reproducibility:
 
-| Dataset | Domain | Samples | Hierarchy Depth |
-|---------|--------|---------|------------------|
-| `rental_poland_short` | Short-term rentals (Airbnb) | 12,847 | 4 |
-| `rental_poland_long` | Long-term rentals (Otodom) | 28,391 | 4 |
-| `rental_uae_contracts` | Dubai rental contracts | 156,203 | 3 |
-| `sales_uae_transactions` | Dubai property sales | 89,456 | 3 |
+| Dataset | Domain | Samples | Hier. Cols | Base Feats | +SCE Feats |
+|---------|--------|---------|------------|------------|------------|
+| `rental_poland_short` | Short-term rentals (Airbnb) | 1,185 | 4 | 9 | 504 |
+| `rental_poland_long` | Long-term rentals (Otodom) | 1,016 | 5 | 4 | 724 |
+| `rental_uae_contracts` | Dubai rental contracts | 50,000 | 6 | 8 | 323 |
+| `sales_uae_transactions` | Dubai property sales | 50,000 | 7 | 10 | 370 |
 
 ```python
 from sce.io import load_dataset

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-01-22
+
+### Fixed
+
+- Corrected dataset sample counts and feature counts in README
+- Dataset table now shows: Hier. Cols, Base Feats, +SCE Feats
+
 ## [0.3.1] - 2026-01-22
 
 ### Changed

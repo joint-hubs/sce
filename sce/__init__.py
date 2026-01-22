@@ -15,7 +15,7 @@ from sce.pipeline import fit_context_pipeline
 from sce.search import FeatureCombinationSearch, SearchResult, SearchSummary
 from sce.selection import LMFeatureSelector, compute_lm_statistics, select_significant_features
 
-__version__ = "0.3.1"  # PyPI release as stat-context
+__version__ = "0.3.2"  # Fix dataset documentation
 __all__ = [
     # Core
     "StatisticalContextEngine",
