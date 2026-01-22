@@ -5,7 +5,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 [![Tests](https://github.com/joint-hubs/sce/actions/workflows/ci.yml/badge.svg)](https://github.com/joint-hubs/sce/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/stat-context.svg)](https://pypi.org/project/stat-context/)
+[![PyPI version](https://badge.fury.io/py/stat-context.svg)](https://pypi.org/project/stat-context/)
 
 ---
 
