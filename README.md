@@ -208,7 +208,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
     def fit_transform(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame: ...
 ```
 
-Full API reference: [docs/api/INDEX.md](docs/api/INDEX.md)
+Full API reference: [Documentation](https://joint-hubs.github.io/sce/api/)
 
 ---
 
@@ -253,7 +253,7 @@ If you use this software in your research, please cite:
 
 ## Contributing
 
-Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on code style, testing, and pull request procedures.
+Contributions are welcome. Please see [CONTRIBUTING.md](https://github.com/joint-hubs/sce/blob/main/CONTRIBUTING.md) for guidelines on code style, testing, and pull request procedures.
 
 ---
 
@@ -261,4 +261,4 @@ Contributions are welcome. Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 
 - [Source Code](https://github.com/joint-hubs/sce)
 - [Issue Tracker](https://github.com/joint-hubs/sce/issues)
-- [Documentation](https://github.com/joint-hubs/sce#readme)
+- [Documentation](https://joint-hubs.github.io/sce/)
