@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-01-23
+
+### Fixed
+
+- Fixed relative links in README for PyPI compatibility (CONTRIBUTING.md, docs links)
+- Added GitHub Pages deployment workflow
+- Documentation now deployed to https://joint-hubs.github.io/sce/
+
+### Added
+
+- MkDocs site with Material theme
+- API reference documentation (auto-generated from docstrings)
+- Getting started guides (installation, quickstart)
+
+## [0.3.4] - 2026-01-23
+
+### Fixed
+
+- Aligned documentation with paper and code
+- Updated README default aggregations to match config.py (8 methods)
+- Fixed `include_interactions` default from `False` to `True` in docs
+- Updated dataset sample counts to match paper Table 1
+- Updated experiments.md result tables with current RMSE/R² values
+- Fixed quickstart example (replaced non-existent `run_experiment` function)
+- Fixed feature naming pattern documentation (`{col}_{target}_{stat}`)
+- Corrected cleanup.py paper_ref (feature cleanup not in paper)
+
 ## [0.3.3] - 2026-01-22
 
 ### Fixed
@@ -67,4 +94,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.3.5 | 2026-01-23 | GitHub Pages docs, PyPI link fixes |
+| 0.3.4 | 2026-01-23 | Documentation alignment with paper |
+| 0.3.3 | 2026-01-22 | Citation and author info |
 | 0.3.0 | 2026-01-19 | Initial public release with auto-detection |
