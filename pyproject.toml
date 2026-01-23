@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stat-context"
-version = "0.3.4"
+version = "0.3.5"
 description = "Statistical Context Engineering: Hierarchical feature enrichment for regression models"
 readme = "README.md"
 license = {text = "CC BY-NC 4.0"}
