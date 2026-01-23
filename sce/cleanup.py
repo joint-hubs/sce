@@ -2,7 +2,7 @@
 @module: sce.cleanup
 @depends: sce.config
 @exports: FeatureCleanupPipeline, CleanupReport
-@paper_ref: Section 3.4 (Feature Quality Assurance)
+@paper_ref: Not in paper (utility module)
 @data_flow: features -> cleanup steps -> reduced feature set
 """
 

@@ -6,6 +6,7 @@
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
 [![Tests](https://github.com/joint-hubs/sce/actions/workflows/ci.yml/badge.svg)](https://github.com/joint-hubs/sce/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/stat-context.svg)](https://pypi.org/project/stat-context/)
+[![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://joint-hubs.github.io/sce)
 
 ---
 
@@ -137,10 +138,10 @@ Four benchmark datasets are provided for reproducibility:
 
 | Dataset | Domain | Samples | Hier. Cols | Base Feats | +SCE Feats |
 |---------|--------|---------|------------|------------|------------|
-| `rental_poland_short` | Short-term rentals (Airbnb) | 1,185 | 4 | 9 | 504 |
-| `rental_poland_long` | Long-term rentals (Otodom) | 1,016 | 5 | 4 | 724 |
-| `rental_uae_contracts` | Dubai rental contracts | 50,000 | 6 | 8 | 323 |
-| `sales_uae_transactions` | Dubai property sales | 50,000 | 7 | 10 | 370 |
+| `rental_poland_short` | Short-term rentals (Airbnb) | 830 | 3 | 40 | 58 |
+| `rental_poland_long` | Long-term rentals (Otodom) | 1,005 | 2 | 6 | 16 |
+| `rental_uae_contracts` | Dubai rental contracts | 19,799 | 4 | 60 | 66 |
+| `sales_uae_transactions` | Dubai property sales | 19,800 | 6 | 77 | 91 |
 
 ```python
 from sce.io import load_dataset
@@ -190,12 +191,12 @@ python scripts/generate_paper_appendix_figures.py
 |-----------|------|---------|-------------|
 | `target_col` | `str` | Required | Name of the target variable column |
 | `categorical_cols` | `list[str]` | `None` | Columns to aggregate over (auto-detected if None) |
-| `aggregations` | `list[AggregationMethod]` | `[MEAN, STD]` | Statistics to compute |
+| `aggregations` | `list[AggregationMethod]` | `[MEAN, MEDIAN, STD, Q05, Q20, Q80, Q95, COUNT]` | Statistics to compute |
 | `use_cross_fitting` | `bool` | `True` | Enable out-of-fold aggregation |
 | `n_folds` | `int` | `5` | Number of cross-fitting folds |
 | `min_group_size` | `int` | `5` | Minimum samples required per group |
 | `include_global_stats` | `bool` | `True` | Include dataset-wide statistics |
-| `include_interactions` | `bool` | `False` | Include cross-column hierarchies |
+| `include_interactions` | `bool` | `True` | Include cross-column hierarchies |
 
 ### StatisticalContextEngine
 
@@ -206,6 +207,8 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
     def transform(self, X: pd.DataFrame) -> pd.DataFrame: ...
     def fit_transform(self, X: pd.DataFrame, y: pd.Series) -> pd.DataFrame: ...
 ```
+
+Full API reference: [docs/api/INDEX.md](docs/api/INDEX.md)
 
 ---
 
