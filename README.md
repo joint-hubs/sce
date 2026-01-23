@@ -138,10 +138,10 @@ Four benchmark datasets are provided for reproducibility:
 
 | Dataset | Domain | Samples | Hier. Cols | Base Feats | +SCE Feats |
 |---------|--------|---------|------------|------------|------------|
-| `rental_poland_short` | Short-term rentals (Airbnb) | 830 | 3 | 40 | 58 |
-| `rental_poland_long` | Long-term rentals (Otodom) | 1,005 | 2 | 6 | 16 |
-| `rental_uae_contracts` | Dubai rental contracts | 19,799 | 4 | 60 | 66 |
-| `sales_uae_transactions` | Dubai property sales | 19,800 | 6 | 77 | 91 |
+| `rental_poland_short` | Short-term rentals (Airbnb) | 1,185 | 4 | 9 | 504 |
+| `rental_poland_long` | Long-term rentals (Otodom) | 1,016 | 5 | 4 | 724 |
+| `rental_uae_contracts` | Dubai rental contracts | 50,000 | 6 | 8 | 323 |
+| `sales_uae_transactions` | Dubai property sales | 50,000 | 7 | 10 | 370 |
 
 ```python
 from sce.io import load_dataset
