@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stat-context"
-version = "0.3.3"
+version = "0.3.4"
 description = "Statistical Context Engineering: Hierarchical feature enrichment for regression models"
 readme = "README.md"
 license = {text = "CC BY-NC 4.0"}
@@ -64,13 +64,18 @@ viz = [
     "matplotlib>=3.5.0",
     "seaborn>=0.12.0",
 ]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings[python]>=0.24.0",
+]
 all = [
-    "sce[dev,data,viz]",
+    "stat-context[dev,data,viz,docs]",
 ]
 
 [project.urls]
 Homepage = "https://github.com/joint-hubs/sce"
-Documentation = "https://github.com/joint-hubs/sce#readme"
+Documentation = "https://joint-hubs.github.io/sce"
 Repository = "https://github.com/joint-hubs/sce.git"
 "Bug Tracker" = "https://github.com/joint-hubs/sce/issues"
 Changelog = "https://github.com/joint-hubs/sce/blob/main/CHANGELOG.md"
