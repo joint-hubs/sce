@@ -1,0 +1,5 @@
+Dataset,Baseline RMSE,+SCE RMSE,ΔRMSE,ΔR²
+Airbnb Poland,"27,368","22,541",↓ 17.6%,+24.49 pp
+Dubai Rentals,"465,037","360,267",↓ 22.5%,+3.83 pp
+Dubai Transactions,"32,489,660","26,353,228",↓ 18.9%,+25.83 pp
+Otodom Poland,"4,581","4,541",↓ 0.9%,+1.55 pp

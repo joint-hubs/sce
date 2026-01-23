@@ -19,12 +19,12 @@ python scripts/run.py --generate-figures
 
 SCE was validated on 4 real-world property pricing datasets:
 
-| Dataset | Records | Description | Config |
-|---------|---------|-------------|--------|
-| rental_poland_short | 37K | Poland apartment rentals (short-term) | [configs/rental_poland_short.toml](configs/rental_poland_short.toml) |
-| rental_poland_long | 83K | Poland apartment rentals (long-term) | [configs/rental_poland_long.toml](configs/rental_poland_long.toml) |
-| rental_uae_contracts | 118K | UAE rental contracts | [configs/rental_uae_contracts.toml](configs/rental_uae_contracts.toml) |
-| sales_uae_transactions | 89K | UAE property sales | [configs/sales_uae_transactions.toml](configs/sales_uae_transactions.toml) |
+| Dataset | Records | Description |
+|---------|---------|-------------|
+| rental_poland_short | 830 | Poland apartment rentals (short-term, Airbnb) |
+| rental_poland_long | 1,005 | Poland apartment rentals (long-term, Otodom) |
+| rental_uae_contracts | 19,799 | UAE rental contracts (Dubai) |
+| sales_uae_transactions | 19,800 | UAE property sales (Dubai) |
 
 ### Download Datasets
 
@@ -79,20 +79,20 @@ python scripts/generate_paper_appendix_figures.py
 
 | Figure | Description | File |
 |--------|-------------|------|
-| M1 | RMSE Improvement | [docs/figures/paper/paper_m1_rmse_improvement.png](docs/figures/paper/paper_m1_rmse_improvement.png) |
-| M2 | Feature Contributions | [docs/figures/paper/paper_m2_feature_contributions.png](docs/figures/paper/paper_m2_feature_contributions.png) |
-| M3 | Strategy Ranking | [docs/figures/paper/paper_m3_strategy_ranking.png](docs/figures/paper/paper_m3_strategy_ranking.png) |
+| M1 | RMSE Improvement | ![M1](figures/paper/paper_m1_rmse_improvement.png) |
+| M2 | Feature Contributions | ![M2](figures/paper/paper_m2_feature_contributions.png) |
+| M3 | Strategy Ranking | ![M3](figures/paper/paper_m3_strategy_ranking.png) |
 
 ### Key Results (Summary)
 
-| Dataset | Baseline RMSE | + SCE RMSE | Improvement |
-|---------|---------------|------------|-------------|
-| rental_poland_short | 585.90 | 581.06 | +0.87% |
-| rental_poland_long | 621.37 | 524.74 | +17.64% |
-| rental_uae_contracts | 18,912.64 | 14,648.71 | +22.53% |
-| sales_uae_transactions | 1,028,247.59 | 834,046.41 | +18.89% |
+| Dataset | Baseline RMSE | + SCE RMSE | ΔRMSE | ΔR² |
+|---------|---------------|------------|-------|-----|
+| rental_poland_long | 4,581 | 4,541 | ↓ 0.9% | +1.55 pp |
+| rental_poland_short | 27,368 | 22,541 | ↓ 17.6% | +24.49 pp |
+| rental_uae_contracts | 465,037 | 360,267 | ↓ 22.5% | +3.83 pp |
+| sales_uae_transactions | 32,489,660 | 26,353,228 | ↓ 18.9% | +25.83 pp |
 
-**Average RMSE improvement: 14.98%**
+**Average RMSE improvement: ~15%**
 
 ### Appendix Figures (Per-Dataset)
 
@@ -107,10 +107,10 @@ Each dataset has 6 appendix figures (A1-A6):
 
 | Dataset | Figures |
 |---------|---------|
-| rental_poland_short | [A1](docs/figures/appendix/appendix_rental_poland_short_A1.png) [A2](docs/figures/appendix/appendix_rental_poland_short_A2.png) [A3](docs/figures/appendix/appendix_rental_poland_short_A3.png) [A4](docs/figures/appendix/appendix_rental_poland_short_A4.png) [A5](docs/figures/appendix/appendix_rental_poland_short_A5.png) [A6](docs/figures/appendix/appendix_rental_poland_short_A6.png) |
-| rental_poland_long | [A1](docs/figures/appendix/appendix_rental_poland_long_A1.png) [A2](docs/figures/appendix/appendix_rental_poland_long_A2.png) [A3](docs/figures/appendix/appendix_rental_poland_long_A3.png) [A4](docs/figures/appendix/appendix_rental_poland_long_A4.png) [A5](docs/figures/appendix/appendix_rental_poland_long_A5.png) [A6](docs/figures/appendix/appendix_rental_poland_long_A6.png) |
-| rental_uae_contracts | [A1](docs/figures/appendix/appendix_rental_uae_contracts_A1.png) [A2](docs/figures/appendix/appendix_rental_uae_contracts_A2.png) [A3](docs/figures/appendix/appendix_rental_uae_contracts_A3.png) [A4](docs/figures/appendix/appendix_rental_uae_contracts_A4.png) [A5](docs/figures/appendix/appendix_rental_uae_contracts_A5.png) [A6](docs/figures/appendix/appendix_rental_uae_contracts_A6.png) |
-| sales_uae_transactions | [A1](docs/figures/appendix/appendix_sales_uae_transactions_A1.png) [A2](docs/figures/appendix/appendix_sales_uae_transactions_A2.png) [A3](docs/figures/appendix/appendix_sales_uae_transactions_A3.png) [A4](docs/figures/appendix/appendix_sales_uae_transactions_A4.png) [A5](docs/figures/appendix/appendix_sales_uae_transactions_A5.png) [A6](docs/figures/appendix/appendix_sales_uae_transactions_A6.png) |
+| rental_poland_short | [A1](figures/appendix/appendix_rental_poland_short_A1.png) [A2](figures/appendix/appendix_rental_poland_short_A2.png) [A3](figures/appendix/appendix_rental_poland_short_A3.png) [A4](figures/appendix/appendix_rental_poland_short_A4.png) [A5](figures/appendix/appendix_rental_poland_short_A5.png) [A6](figures/appendix/appendix_rental_poland_short_A6.png) |
+| rental_poland_long | [A1](figures/appendix/appendix_rental_poland_long_A1.png) [A2](figures/appendix/appendix_rental_poland_long_A2.png) [A3](figures/appendix/appendix_rental_poland_long_A3.png) [A4](figures/appendix/appendix_rental_poland_long_A4.png) [A5](figures/appendix/appendix_rental_poland_long_A5.png) [A6](figures/appendix/appendix_rental_poland_long_A6.png) |
+| rental_uae_contracts | [A1](figures/appendix/appendix_rental_uae_contracts_A1.png) [A2](figures/appendix/appendix_rental_uae_contracts_A2.png) [A3](figures/appendix/appendix_rental_uae_contracts_A3.png) [A4](figures/appendix/appendix_rental_uae_contracts_A4.png) [A5](figures/appendix/appendix_rental_uae_contracts_A5.png) [A6](figures/appendix/appendix_rental_uae_contracts_A6.png) |
+| sales_uae_transactions | [A1](figures/appendix/appendix_sales_uae_transactions_A1.png) [A2](figures/appendix/appendix_sales_uae_transactions_A2.png) [A3](figures/appendix/appendix_sales_uae_transactions_A3.png) [A4](figures/appendix/appendix_sales_uae_transactions_A4.png) [A5](figures/appendix/appendix_sales_uae_transactions_A5.png) [A6](figures/appendix/appendix_sales_uae_transactions_A6.png) |
 
 ## Reproducibility Notes
 

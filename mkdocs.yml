@@ -1,0 +1,78 @@
+site_name: Statistical Context Engineering
+site_description: Hierarchical feature enrichment for regression models
+site_url: https://joint-hubs.github.io/sce
+repo_url: https://github.com/joint-hubs/sce
+repo_name: joint-hubs/sce
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.sections
+    - navigation.expand
+    - search.highlight
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            docstring_style: google
+            members_order: source
+            show_signature_annotations: true
+            separate_signature: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - API Reference:
+      - Overview: api/index.md
+      - Core:
+          - config: api/config.md
+          - engine: api/engine.md
+          - stats: api/stats.md
+          - cleanup: api/cleanup.md
+      - Pipeline:
+          - pipeline: api/pipeline.md
+          - model_presets: api/model_presets.md
+      - Experimental:
+          - search: api/search.md
+          - selection: api/selection.md
+          - importance: api/importance.md
+      - Utilities:
+          - cli: api/cli.md
+          - io: api/io.md
+  - Experiments: experiments.md
