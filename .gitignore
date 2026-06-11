@@ -54,8 +54,28 @@ coverage.xml
 data/parquet/rental_uae_*.parquet
 data/parquet/sales_uae_*.parquet
 
+# Kaggle-derived datasets (cannot be redistributed; rebuild via prepare scripts)
+data/parquet/m5_store_dept_daily.parquet
+data/parquet/melbourne_housing.parquet
+data/parquet/rossmann_daily.parquet
+data/parquet/walmart_weekly.parquet
+data/raw/
+
+# Credentials
+configs/kaggle.json
+
+# Training artifacts
+catboost_info/
+
+# Local tooling output
+sce/graphify-out/
+scripts/tmp_*.ps1
+
 # Results (regenerated)
 results/
+
+# MkDocs build output
+site/
 
 # Jupyter
 .ipynb_checkpoints/
