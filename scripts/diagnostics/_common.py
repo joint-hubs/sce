@@ -9,6 +9,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 from scripts.run import (
     CONFIGS_DIR,
+    _filter_target_rows,
     _resolve_context_variant,
     _resolve_categorical_mode,
     _resolve_standard_model,
@@ -102,4 +103,6 @@ def load_config_and_dataset(config_name: str):
     config = load_config(config_path)
     df = load_dataset(config)
     target_col = config["target"]["column"]
+    # Same target hygiene as run_experiment: rows without a target are unusable
+    df = _filter_target_rows(df, target_col)
     return config, config_path, df, target_col
