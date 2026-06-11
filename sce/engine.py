@@ -336,9 +336,21 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
             sorted_positions = X_reset.sort_values(time_col, kind="mergesort").index.to_numpy()
             X_cf = X_reset.iloc[sorted_positions].reset_index(drop=True)
             if strategy == "rolling":
+                # Largest test size TimeSeriesSplit can accommodate; configs tuned
+                # for full datasets must not crash on smaller (e.g. subsampled) data.
+                max_feasible_test = max(1, len(X_cf) // (self.config.n_folds + 1))
                 resolved_test_size = self.config.rolling_test_size
                 if resolved_test_size is None:
-                    resolved_test_size = max(1, len(X_cf) // (self.config.n_folds + 1))
+                    resolved_test_size = max_feasible_test
+                elif resolved_test_size > max_feasible_test:
+                    logger.warning(
+                        "rolling_test_size=%s too large for %s rows with %s folds; clamping to %s",
+                        resolved_test_size,
+                        len(X_cf),
+                        self.config.n_folds,
+                        max_feasible_test,
+                    )
+                    resolved_test_size = max_feasible_test
 
                 resolved_max_train_size = self.config.rolling_max_train_size
                 if resolved_max_train_size is None:

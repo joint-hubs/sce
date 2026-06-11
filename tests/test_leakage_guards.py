@@ -37,6 +37,32 @@ def test_temporal_with_rolling_crossfit_passes():
     assert sce_config.cross_fit_strategy == "rolling"
 
 
+def test_rolling_crossfit_clamps_oversized_test_size():
+    """rolling_test_size tuned for a full dataset must not crash smaller samples."""
+    df = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=30, freq="D"),
+            "city": ["A"] * 15 + ["B"] * 15,
+            "price": [float(i) for i in range(30)],
+        }
+    )
+
+    config = ContextConfig(
+        target_col="price",
+        categorical_cols=["city"],
+        aggregations=[AggregationMethod.MEAN],
+        use_cross_fitting=True,
+        cross_fit_strategy="rolling",
+        time_col="date",
+        n_folds=4,
+        rolling_test_size=30000,  # config for a 400k-row dataset
+        include_interactions=False,
+    )
+    engine = StatisticalContextEngine(config)
+    enriched = engine.fit_transform(df)
+    assert len(enriched) == len(df)
+
+
 def test_rolling_crossfit_is_monotonic():
     df = pd.DataFrame(
         {
