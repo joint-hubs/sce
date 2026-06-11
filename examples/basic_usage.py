@@ -25,7 +25,7 @@ def main():
     
     # Configure SCE
     config = ContextConfig(
-        target_col="price",
+        target_col="price_PLN_per_night",
         # categorical_cols auto-detected from DataFrame!
         aggregations=[
             AggregationMethod.MEAN,
@@ -42,8 +42,8 @@ def main():
     engine = StatisticalContextEngine(config)
     
     # Split data
-    X = df.drop(columns=["price"])
-    y = df["price"]
+    X = df.drop(columns=["price_PLN_per_night"])
+    y = df["price_PLN_per_night"]
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )

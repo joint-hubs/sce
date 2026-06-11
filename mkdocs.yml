@@ -3,6 +3,8 @@ site_description: Hierarchical feature enrichment for regression models
 site_url: https://joint-hubs.github.io/sce
 repo_url: https://github.com/joint-hubs/sce
 repo_name: joint-hubs/sce
+exclude_docs: |
+  plan/
 
 theme:
   name: material

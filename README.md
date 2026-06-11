@@ -58,34 +58,34 @@ pip install stat-context[all]   # All optional dependencies
 
 ```python
 from sce import StatisticalContextEngine, ContextConfig, AggregationMethod
-from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from xgboost import XGBRegressor
 import pandas as pd
 
 # Load data
 df = pd.read_csv("rental_data.csv")
-X = df.drop(columns=["price"])
-y = df["price"]
+
+# Split first for clean predictive evaluation
+train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
 # Configure the context engine
 config = ContextConfig(
     target_col="price",
     aggregations=[AggregationMethod.MEAN, AggregationMethod.STD],
     use_cross_fitting=True,
-    n_folds=5
+    n_folds=5,
 )
 
-# Build pipeline
-pipeline = Pipeline([
-    ("sce", StatisticalContextEngine(config)),
-    ("model", XGBRegressor(n_estimators=100))
-])
+engine = StatisticalContextEngine(config)
+train_enriched = engine.fit_transform(train_df)
+test_enriched = engine.transform(test_df.drop(columns=["price"]))
 
-# Train and predict
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-pipeline.fit(X_train, y_train)
-predictions = pipeline.predict(X_test)
+X_train = train_enriched.drop(columns=["price"])
+y_train = train_enriched["price"]
+
+model = XGBRegressor(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+predictions = model.predict(test_enriched)
 ```
 
 ### Explicit Column Specification
@@ -148,6 +148,17 @@ from sce.io import load_dataset
 
 df = load_dataset("rental_poland_short")   # Bundled with package
 df = load_dataset("rental_uae_contracts")  # Downloaded on first use
+```
+
+```bash
+# Inspect configured datasets
+sce datasets list
+
+# Download a remote dataset explicitly
+sce datasets download rental_uae_contracts
+
+# Build the optional M5-derived benchmark locally
+python scripts/prepare_m5_dataset.py --download
 ```
 
 ---

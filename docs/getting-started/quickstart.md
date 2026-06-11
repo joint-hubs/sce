@@ -40,19 +40,21 @@ engine = StatisticalContextEngine(config)
 enriched_df = engine.fit_transform(df)
 ```
 
-## In a scikit-learn Pipeline
+## Clean Train/Test Workflow
 
 ```python
-from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor
 
-pipeline = Pipeline([
-    ("context", StatisticalContextEngine(config)),
-    ("model", GradientBoostingRegressor())
-])
+train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
-pipeline.fit(X_train, y_train)
-predictions = pipeline.predict(X_test)
+engine = StatisticalContextEngine(config)
+enriched_train = engine.fit_transform(train_df)
+enriched_test = engine.transform(test_df.drop(columns=["price"]))
+
+model = GradientBoostingRegressor(random_state=42)
+model.fit(enriched_train.drop(columns=["price"]), enriched_train["price"])
+predictions = model.predict(enriched_test)
 ```
 
 ## Full Experiment Pipeline
@@ -65,28 +67,22 @@ from sklearn.metrics import mean_squared_error
 from xgboost import XGBRegressor
 from sce import StatisticalContextEngine, ContextConfig
 
-# Split data
-X_train, X_test, y_train, y_test = train_test_split(
-    df.drop(columns=["price"]), df["price"], test_size=0.2
-)
-
-# Add target back for SCE (needed for cross-fitting)
-train_df = X_train.copy()
-train_df["price"] = y_train
+# Split data first
+train_df, test_df = train_test_split(df, test_size=0.2, random_state=42)
 
 # Fit SCE and transform
 config = ContextConfig(target_col="price", use_cross_fitting=True)
 engine = StatisticalContextEngine(config)
 enriched_train = engine.fit_transform(train_df)
-enriched_test = engine.transform(X_test)
+enriched_test = engine.transform(test_df.drop(columns=["price"]))
 
 # Train model
 model = XGBRegressor(n_estimators=100)
-model.fit(enriched_train.drop(columns=["price"]), y_train)
+model.fit(enriched_train.drop(columns=["price"]), enriched_train["price"])
 
 # Evaluate
 preds = model.predict(enriched_test)
-rmse = mean_squared_error(y_test, preds, squared=False)
+rmse = mean_squared_error(test_df["price"], preds, squared=False)
 print(f"SCE RMSE: {rmse:.2f}")
 ```
 
