@@ -1,0 +1,60 @@
+# Configuration for Rossmann Store Sales dataset (German retail)
+
+[dataset]
+name = "rossmann_daily"
+description = "Daily sales for 1,115 Rossmann drug stores across Germany"
+source = "kaggle"
+path = "data/parquet/rossmann_daily.parquet"
+
+[target]
+column = "Sales"
+description = "Daily store revenue in EUR"
+
+[features]
+numeric = ["CompetitionDistance", "Customers", "month", "day_of_month", "week_of_year"]
+categorical = ["Store", "StoreType", "Assortment", "DayOfWeek", "Promo", "Promo2", "StateHoliday", "SchoolHoliday"]
+
+[sce]
+aggregations = ["mean", "median", "std", "count", "q05", "q20", "q80", "q95"]
+min_group_size = 10
+use_cross_fitting = true
+cross_fit_strategy = "rolling"
+# Fixed rolling windows calibrated in row counts (larger windows reduce sparse-group dropouts)
+rolling_max_train_size = 600000
+rolling_test_size = 120000
+rolling_gap = 0
+n_folds = 5
+include_interactions = false
+max_interaction_depth = 1
+max_cardinality = 5000
+
+[split]
+strategy = "temporal"
+time_col = "Date"
+test_periods = 48
+
+[model]
+type = "xgboost"
+n_estimators = 200
+max_depth = 6
+learning_rate = 0.05
+
+[run]
+xgboost_configs = ["shallow", "boosted", "default"]
+p_threshold = 0.05
+min_non_missing_pct = 0.35
+
+[run.search]
+sampling_pct = 5.0
+min_configs = 50
+max_configs = 300
+run_ablation = true
+run_significance_selection = true
+
+[run.lm_selection]
+enabled = true
+p_threshold = 0.05
+max_features = 100
+
+
+

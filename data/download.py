@@ -1,13 +1,13 @@
 """
 @module: data.download
 @depends:
-@exports: download_dataset, download_all, verify_integrity
-@data_flow: manifest -> HF Hub -> local parquet -> checksum verify
+@exports: download_dataset, download_all, verify_all, parse_source
+@data_flow: manifest -> remote provider -> local parquet -> checksum verify
 
-Data download script for remote datasets.
+Data download script for manifest-backed datasets.
 
 Usage:
-    python data/download.py --dataset rental_uae_contracts
+    python data/download.py --dataset rental_uae_contracts.parquet
     python data/download.py --all
     python data/download.py --verify
 """
@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import shutil
+import subprocess
 import sys
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import NamedTuple
 
@@ -34,6 +38,14 @@ class DatasetEntry(NamedTuple):
     checksum: str
     size: int
     source: str
+
+
+class SourceSpec(NamedTuple):
+    provider: str
+    resource_type: str
+    resource: str
+    file_name: str
+    raw_source: str
 
 
 def parse_manifest() -> dict[str, DatasetEntry]:
@@ -74,6 +86,39 @@ def verify_file(path: Path, entry: DatasetEntry) -> bool:
     return sha256_file(path) == entry.checksum
 
 
+def parse_source(source: str) -> SourceSpec:
+    """Parse a manifest source into a provider-aware spec."""
+    if source == "local":
+        return SourceSpec("local", "", "", "", source)
+
+    if source.startswith(("http://", "https://")):
+        return SourceSpec("http", "", source, "", source)
+
+    if not source.startswith("kaggle://"):
+        raise ValueError(
+            "Unsupported dataset source. Expected local, http(s), or kaggle://..."
+        )
+
+    path = source[len("kaggle://") :]
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 3:
+        raise ValueError(
+            "Kaggle sources must use kaggle://datasets/<owner>/<dataset>/<file> "
+            "or kaggle://competitions/<competition>/<file>"
+        )
+
+    resource_type = parts[0]
+    file_name = parts[-1]
+    resource = "/".join(parts[1:-1])
+    if resource_type not in {"datasets", "competitions"} or not resource or not file_name:
+        raise ValueError(
+            "Kaggle sources must use kaggle://datasets/<owner>/<dataset>/<file> "
+            "or kaggle://competitions/<competition>/<file>"
+        )
+
+    return SourceSpec("kaggle", resource_type, resource, file_name, source)
+
+
 def download_file(url: str, dest: Path, expected_size: int, retries: int = 3) -> None:
     """Download file with progress bar and retry logic."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -103,6 +148,99 @@ def download_file(url: str, dest: Path, expected_size: int, retries: int = 3) ->
             print(f"  Retry {attempt}/{retries} after error: {e}")
 
 
+def _extract_from_archive(archive_path: Path, requested_name: str, output_dir: Path) -> Path:
+    with zipfile.ZipFile(archive_path) as archive:
+        requested_basename = Path(requested_name).name
+        for member in archive.namelist():
+            if Path(member).name == requested_basename:
+                archive.extract(member, output_dir)
+                return output_dir / member
+
+    raise RuntimeError(f"Could not find '{requested_name}' inside {archive_path.name}")
+
+
+def _find_downloaded_file(download_dir: Path, requested_name: str) -> Path:
+    requested_basename = Path(requested_name).name
+
+    direct_match = download_dir / requested_name
+    if direct_match.exists():
+        return direct_match
+
+    for candidate in download_dir.rglob("*"):
+        if candidate.is_file() and candidate.name == requested_basename:
+            return candidate
+
+    for archive_path in download_dir.glob("*.zip"):
+        return _extract_from_archive(archive_path, requested_name, download_dir)
+
+    raise RuntimeError(f"Downloaded artifact '{requested_name}' was not found")
+
+
+def _resolve_kaggle_command() -> list[str]:
+    for name in ("kaggle.exe", "kaggle"):
+        candidate = Path(sys.executable).with_name(name)
+        if candidate.exists():
+            return [str(candidate)]
+    return [sys.executable, "-m", "kaggle.cli"]
+
+
+def download_kaggle_file(spec: SourceSpec, dest: Path) -> None:
+    """Download a single file from Kaggle via the official CLI."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        command = _resolve_kaggle_command()
+        if spec.resource_type == "competitions":
+            command.extend(
+                [
+                    "competitions",
+                    "download",
+                    "-c",
+                    spec.resource,
+                    "-f",
+                    spec.file_name,
+                    "-p",
+                    tmp_dir,
+                    "-q",
+                ]
+            )
+        else:
+            command.extend(
+                [
+                    "datasets",
+                    "download",
+                    "-d",
+                    spec.resource,
+                    "-f",
+                    spec.file_name,
+                    "-p",
+                    tmp_dir,
+                    "-q",
+                ]
+            )
+
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            error_text = result.stderr.strip() or result.stdout.strip() or "unknown Kaggle error"
+            raise RuntimeError(error_text)
+
+        downloaded = _find_downloaded_file(Path(tmp_dir), spec.file_name)
+        shutil.move(str(downloaded), dest)
+
+
+def download_from_source(entry: DatasetEntry, dest: Path) -> None:
+    """Download a dataset from the provider declared in the manifest."""
+    spec = parse_source(entry.source)
+    if spec.provider == "http":
+        download_file(spec.resource, dest, entry.size)
+        return
+
+    if spec.provider == "kaggle":
+        download_kaggle_file(spec, dest)
+        return
+
+    raise RuntimeError(f"Dataset '{entry.name}' is not downloadable from source '{entry.source}'")
+
+
 def download_dataset(name: str, force: bool = False) -> bool:
     """Download a single dataset by name."""
     manifest = parse_manifest()
@@ -125,7 +263,12 @@ def download_dataset(name: str, force: bool = False) -> bool:
         return True
 
     print(f"Downloading '{name}' from {entry.source}...")
-    download_file(entry.source, dest, entry.size)
+    try:
+        download_from_source(entry, dest)
+    except RuntimeError as exc:
+        print(f"Error: Failed to download '{name}': {exc}")
+        dest.unlink(missing_ok=True)
+        return False
 
     if not verify_file(dest, entry):
         print(f"Error: Checksum mismatch for '{name}'!")

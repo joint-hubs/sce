@@ -136,7 +136,7 @@ def test_manifest_has_remote_entries():
     for name in REMOTE_DATASETS:
         assert name in manifest, f"Missing manifest entry for {name}"
         entry = manifest[name]
-        assert entry["source"].startswith("https://")
+        assert entry["source"].startswith(("https://", "kaggle://"))
         assert entry["checksum"].startswith("sha256:")
         assert entry["checksum"] != "sha256:pending"
         assert int(entry["size"]) > 0

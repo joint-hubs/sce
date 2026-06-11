@@ -1,0 +1,56 @@
+# Configuration for Walmart Sales Forecast dataset (US retail)
+
+[dataset]
+name = "walmart_weekly"
+description = "Weekly sales for 45 Walmart stores across departments"
+source = "kaggle"
+path = "data/parquet/walmart_weekly.parquet"
+
+[target]
+column = "Weekly_Sales"
+description = "Weekly department-level sales in USD"
+
+[features]
+numeric = ["Size", "Temperature", "Fuel_Price", "CPI", "Unemployment", "MarkDown1", "MarkDown2", "MarkDown3", "MarkDown4", "MarkDown5", "month", "week_of_year", "year"]
+categorical = ["Store", "Dept", "Type", "IsHoliday"]
+
+[sce]
+aggregations = ["mean", "median", "std", "count", "q05", "q20", "q80", "q95"]
+min_group_size = 5
+use_cross_fitting = true
+cross_fit_strategy = "rolling"
+# Fixed rolling windows calibrated in row counts (larger windows reduce sparse-group dropouts)
+rolling_max_train_size = 180000
+rolling_test_size = 30000
+rolling_gap = 0
+n_folds = 5
+include_interactions = false
+max_interaction_depth = 1
+max_cardinality = 5000
+
+[split]
+strategy = "temporal"
+time_col = "Date"
+test_periods = 39
+
+[model]
+type = "xgboost"
+n_estimators = 200
+max_depth = 6
+learning_rate = 0.05
+
+[run]
+xgboost_configs = ["shallow", "boosted", "default"]
+p_threshold = 0.05
+
+[run.search]
+sampling_pct = 5.0
+min_configs = 50
+max_configs = 300
+run_ablation = true
+run_significance_selection = true
+
+[run.lm_selection]
+enabled = true
+p_threshold = 0.05
+max_features = 100

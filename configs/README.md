@@ -23,6 +23,18 @@ n_folds = 5
 
 **That's it!** Categorical columns are auto-detected from the DataFrame.
 
+## Remote Source Notes
+
+Dataset configs still point to the local parquet path. Remote acquisition is declared in the manifest entry for that parquet file.
+
+Supported manifest source formats:
+
+- `https://...` for direct file downloads
+- `kaggle://datasets/<owner>/<dataset>/<file>` for Kaggle datasets
+- `kaggle://competitions/<competition>/<file>` for Kaggle competitions
+
+Remote sources should be converted into the deterministic parquet files used by experiments.
+
 ## Optional Overrides
 
 ```toml
@@ -75,6 +87,7 @@ drop_zero_variance = true
 | `rental_poland_long.toml` | Long-term rentals | `price_per_sqm` |
 | `rental_uae_contracts.toml` | Dubai rental contracts | `annual_amount` |
 | `sales_uae_transactions.toml` | Dubai property sales | `amount` |
+| `m5_store_dept_daily.toml` | Hierarchical daily demand (generated from M5 raw files) | `demand` |
 
 ## Migration from v0.2.x
 
