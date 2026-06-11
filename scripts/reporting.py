@@ -131,13 +131,25 @@ def _update_root_readme(output_dir: Path) -> None:
 
 
 def generate_search_reports(results_df: pd.DataFrame, output_dir: Path) -> None:
-    """Generate reporting figures and tables for search results."""
+    """Generate reporting figures and tables for search results.
+
+    Validation-scored candidates and the test-scored winners live in the same
+    frame (``eval_set`` column). Candidate tables and figures use validation
+    rows only; test rows are written to a separate final-results table so the
+    two metrics are never ranked against each other.
+    """
     data_dir = output_dir / "data"
     figures_dir = output_dir / "figures"
     data_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save top-5 configs table
+    if "eval_set" in results_df.columns:
+        final_df = results_df[results_df["eval_set"] == "test"]
+        if not final_df.empty:
+            final_df.to_csv(data_dir / "final_test_results.csv", index=False)
+        results_df = results_df[results_df["eval_set"] != "test"]
+
+    # Save top-5 configs table (validation metrics)
     top5 = results_df.sort_values("rmse").head(5)
     top5.to_csv(data_dir / "top_5_configs.csv", index=False)
 

@@ -1263,6 +1263,16 @@ def run_search_experiment(
     run_ablation = search_cfg.get("run_ablation", True)
     run_significance = search_cfg.get("run_significance_selection", True) and lm_enabled
 
+    split_strategy = config.get("split", {}).get("strategy", "random")
+    search_val_strategy = "tail" if split_strategy == "temporal" else "random"
+    search_val_fraction = float(search_cfg.get("val_fraction", 0.2))
+    logger.info(
+        "Search selection protocol: internal %s validation split (%.0f%% of train); "
+        "test set evaluated once for selected winners only",
+        search_val_strategy,
+        search_val_fraction * 100,
+    )
+
     searcher = FeatureCombinationSearch(
         base_features=base_features,
         context_features=context_features,
@@ -1275,24 +1285,23 @@ def run_search_experiment(
         run_ablation=run_ablation,
         run_significance_selection=run_significance,
         p_threshold=lm_threshold,
+        val_fraction=search_val_fraction,
+        val_strategy=search_val_strategy,
     )
 
     summary = searcher.search(X_train_all, y_train, X_test_all, y_test)
 
-    baseline_candidates = [r for r in summary.all_results if getattr(r, "n_context", 0) == 0]
-    if baseline_candidates:
-        baseline_best = min(baseline_candidates, key=lambda r: r.rmse)
-        baseline_rmse = float(baseline_best.rmse)
-        baseline_r2 = float(baseline_best.r2)
-    else:
-        baseline_rmse = float(summary.best_by_rmse.rmse)
-        baseline_r2 = float(summary.best_by_rmse.r2)
+    # Baseline and best-SCE metrics are unbiased test-set scores: winners were
+    # selected on the internal validation split and refit on the full train.
+    baseline_rmse = float(summary.baseline_result.rmse)
+    baseline_r2 = float(summary.baseline_result.r2)
 
     best_sce_rmse = float(summary.best_by_rmse.rmse)
     rmse_improvement_pct = 0.0
     if baseline_rmse > 0:
         rmse_improvement_pct = ((baseline_rmse - best_sce_rmse) / baseline_rmse) * 100.0
 
+    final_results = [summary.baseline_result, summary.best_by_rmse, summary.best_by_r2]
     results_df = pd.DataFrame([
         {
             "config_id": r.config_id,
@@ -1304,9 +1313,11 @@ def run_search_experiment(
             "rmse": r.rmse,
             "r2": r.r2,
             "mae": r.mae,
+            "eval_set": r.eval_set,
+            "val_rmse": r.val_rmse,
             "features": "|".join(r.features),
         }
-        for r in summary.all_results
+        for r in list(summary.all_results) + final_results
     ])
     results_df.to_csv(output_dir / "data" / "model_comparison.csv", index=False)
 
@@ -1315,12 +1326,17 @@ def run_search_experiment(
     if not agg_importance.empty:
         agg_importance.to_csv(output_dir / "data" / "aggregated_feature_importance.csv", index=False)
 
-    # Pruning steps (default preset)
+    # Pruning steps (default preset) — scored on the internal validation
+    # split so the pruning trace does not consume the test set.
+    X_prune_fit = X_train_all.iloc[searcher.fit_indices_]
+    y_prune_fit = y_train.iloc[searcher.fit_indices_]
+    X_prune_val = X_train_all.iloc[searcher.val_indices_]
+    y_prune_val = y_train.iloc[searcher.val_indices_]
     pruning_results, removed_df = run_iterative_pruning(
-        X_train_all,
-        y_train,
-        X_test_all,
-        y_test,
+        X_prune_fit,
+        y_prune_fit,
+        X_prune_val,
+        y_prune_val,
         features=base_features + context_features,
         model_type=model_type,
         model_config_name="default",
@@ -1397,6 +1413,12 @@ def run_search_experiment(
         },
     )
     metadata["search"] = {
+        "selection_protocol": {
+            "candidate_eval_set": "validation",
+            "winner_eval_set": "test",
+            "val_fraction": search_val_fraction,
+            "val_strategy": search_val_strategy,
+        },
         "sampling_pct": sampling_pct_val,
         "min_configs": min_samples,
         "max_configs": max_samples,

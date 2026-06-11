@@ -27,7 +27,15 @@ from sce.models import build_model, extract_feature_importance
 
 @dataclass
 class SearchResult:
-    """Result from a single model configuration."""
+    """Result from a single model configuration.
+
+    ``eval_set`` records which holdout produced the headline metrics:
+    candidate configurations are scored on the internal validation split
+    (``eval_set="validation"``), while the selected winners are refit on the
+    full training data and scored exactly once on the test set
+    (``eval_set="test"``). For test-evaluated results, ``val_rmse``/``val_r2``/
+    ``val_mae`` preserve the validation score that drove the selection.
+    """
 
     config_id: int
     strategy: str  # 'baseline', 'context_only', 'base_context'
@@ -40,11 +48,21 @@ class SearchResult:
     features: List[str]
     model_config: str  # e.g., 'default', 'shallow', 'boosted'
     feature_importance: Optional[pd.DataFrame] = None
+    eval_set: str = "validation"
+    val_rmse: Optional[float] = None
+    val_r2: Optional[float] = None
+    val_mae: Optional[float] = None
 
 
 @dataclass
 class SearchSummary:
-    """Summary of model search results."""
+    """Summary of model search results.
+
+    ``all_results`` holds every candidate scored on the validation split.
+    ``best_by_rmse``, ``best_by_r2`` and ``baseline_result`` are selected on
+    validation metrics, refit on the full training data, and carry unbiased
+    test-set metrics (``eval_set="test"``).
+    """
 
     all_results: List[SearchResult]
     best_by_rmse: SearchResult
@@ -144,6 +162,8 @@ class FeatureCombinationSearch:
         run_ablation: bool = True,
         run_significance_selection: bool = True,
         p_threshold: float = 0.1,
+        val_fraction: float = 0.2,
+        val_strategy: str = "random",
     ):
         """
         Initialize search.
@@ -160,6 +180,11 @@ class FeatureCombinationSearch:
             run_ablation: Whether to run ablation experiments (remove best/worst)
             run_significance_selection: Whether to run LM/tree significance selection
             p_threshold: P-value threshold for LM significance selection
+            val_fraction: Fraction of the training rows held out as the internal
+                validation split used for candidate selection
+            val_strategy: "random" for a shuffled validation split, "tail" to
+                hold out the last rows in the given order (use with
+                time-ordered training data to avoid temporal leakage)
         """
         self.base_features = base_features
         self.context_features = context_features
@@ -173,9 +198,17 @@ class FeatureCombinationSearch:
         self.run_ablation = run_ablation
         self.run_significance_selection = run_significance_selection
         self.p_threshold = p_threshold
+        if not 0.0 < val_fraction < 1.0:
+            raise ValueError("val_fraction must be in (0, 1)")
+        if val_strategy not in {"random", "tail"}:
+            raise ValueError("val_strategy must be 'random' or 'tail'")
+        self.val_fraction = val_fraction
+        self.val_strategy = val_strategy
 
         self.results_: List[SearchResult] = []
         self.feature_gains_: Dict[str, List[float]] = {}
+        self.fit_indices_: Optional[np.ndarray] = None
+        self.val_indices_: Optional[np.ndarray] = None
 
     def _generate_combinations(self) -> List[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
         """Generate random feature combinations to test.
@@ -239,6 +272,24 @@ class FeatureCombinationSearch:
 
         return combinations
 
+    def _split_selection_indices(self, n_rows: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Split training row positions into fit/validation for candidate selection."""
+        n_val = max(1, int(round(n_rows * self.val_fraction)))
+        if n_val >= n_rows:
+            raise ValueError(
+                f"val_fraction={self.val_fraction} leaves no fit rows for n_rows={n_rows}"
+            )
+
+        if self.val_strategy == "tail":
+            fit_idx = np.arange(n_rows - n_val)
+            val_idx = np.arange(n_rows - n_val, n_rows)
+        else:
+            rng = np.random.RandomState(self.random_state)
+            perm = rng.permutation(n_rows)
+            val_idx = np.sort(perm[:n_val])
+            fit_idx = np.sort(perm[n_val:])
+        return fit_idx, val_idx
+
     def search(
         self,
         X_train: pd.DataFrame,
@@ -250,30 +301,47 @@ class FeatureCombinationSearch:
         """
         Run the feature combination search.
 
+        Evaluation protocol: the training data is split into an internal
+        fit/validation partition (see ``val_fraction``/``val_strategy``).
+        Every candidate combination is scored on the validation split only.
+        The winners (best by validation RMSE, best by validation R2, and the
+        best baseline) are then refit on the full training data and evaluated
+        exactly once on the test set, so reported test metrics are free of
+        selection bias.
+
         Args:
                 X_train: Training features
                 y_train: Training targets
-                X_test: Test features
-                y_test: Test targets
+                X_test: Test features (used only for the final evaluation)
+                y_test: Test targets (used only for the final evaluation)
             progress_callback: Optional callback(current, total) for progress
 
         Returns:
-            SearchSummary with all results and best configurations
+            SearchSummary with validation-scored candidates and test-scored winners
         """
         combinations = self._generate_combinations()
 
+        fit_idx, val_idx = self._split_selection_indices(len(X_train))
+        self.fit_indices_ = fit_idx
+        self.val_indices_ = val_idx
+        X_fit = X_train.iloc[fit_idx]
+        y_fit = y_train.iloc[fit_idx]
+        X_val = X_train.iloc[val_idx]
+        y_val = y_train.iloc[val_idx]
+
         # =================================================================
-        # Add significance-based selection strategies
+        # Add significance-based selection strategies (fit split only —
+        # the validation split must stay untouched during candidate design)
         # =================================================================
         if self.run_significance_selection and len(self.context_features) > 0:
-            sig_combos = self._generate_significance_combinations(X_train, y_train)
+            sig_combos = self._generate_significance_combinations(X_fit, y_fit)
             combinations.extend(sig_combos)
 
         # =================================================================
         # Add ablation strategies (remove best/worst iteratively)
         # =================================================================
         if self.run_ablation and len(self.context_features) > 0:
-            ablation_combos = self._generate_ablation_combinations(X_train, y_train)
+            ablation_combos = self._generate_ablation_combinations(X_fit, y_fit)
             combinations.extend(ablation_combos)
 
         total = len(combinations) * len(self.model_configs)
@@ -281,7 +349,6 @@ class FeatureCombinationSearch:
         self.results_ = []
         self.feature_gains_ = {}
         config_id = 0
-        baseline_result = None
         common_feature_names = set(X_train.columns).intersection(X_test.columns)
 
         for strategy, base_subset, context_subset in combinations:
@@ -291,16 +358,16 @@ class FeatureCombinationSearch:
             if not features:
                 continue
 
-            X_train_sub = X_train[features]
-            X_test_sub = X_test[features]
+            X_fit_sub = X_fit[features]
+            X_val_sub = X_val[features]
 
             for model_cfg in self.model_configs:
                 try:
                     model, metrics, importance = train_model(
-                        X_train_sub,
-                        y_train,
-                        X_test_sub,
-                        y_test,
+                        X_fit_sub,
+                        y_fit,
+                        X_val_sub,
+                        y_val,
                         self.model_type,
                         model_cfg,
                         model_params=self.model_params,
@@ -318,6 +385,10 @@ class FeatureCombinationSearch:
                         features=features,
                         model_config=model_cfg,
                         feature_importance=importance,
+                        eval_set="validation",
+                        val_rmse=metrics["rmse"],
+                        val_r2=metrics["r2"],
+                        val_mae=metrics["mae"],
                     )
                     self.results_.append(result)
 
@@ -328,9 +399,6 @@ class FeatureCombinationSearch:
                             if feat not in self.feature_gains_:
                                 self.feature_gains_[feat] = []
                             self.feature_gains_[feat].append(row["importance"])
-
-                    if strategy == "baseline" and model_cfg == "default":
-                        baseline_result = result
 
                 except Exception as e:
                     # Log the failure so we can debug
@@ -356,11 +424,60 @@ class FeatureCombinationSearch:
                 f"Check debug logs for train_model failures."
             )
 
-        # Find best results
-        best_rmse = min(self.results_, key=lambda r: r.rmse)
-        best_r2 = max(self.results_, key=lambda r: r.r2)
+        # Selection happens on validation metrics only
+        valid_r2 = [r for r in self.results_ if np.isfinite(r.r2)]
+        best_val_rmse = min(self.results_, key=lambda r: r.rmse)
+        best_val_r2 = max(valid_r2 or self.results_, key=lambda r: r.r2)
+        baseline_candidates = [r for r in self.results_ if r.strategy == "baseline"]
+        best_val_baseline = (
+            min(baseline_candidates, key=lambda r: r.rmse) if baseline_candidates else None
+        )
 
-        # Feature usage in top 20 models
+        # Final evaluation: refit winners on the full training data, score
+        # once on the test set. Cache so identical winners are not retrained.
+        test_eval_cache: Dict[Tuple[Tuple[str, ...], str], SearchResult] = {}
+
+        def _evaluate_on_test(selected: SearchResult) -> SearchResult:
+            cache_key = (tuple(selected.features), selected.model_config)
+            if cache_key in test_eval_cache:
+                return test_eval_cache[cache_key]
+
+            _, metrics, importance = train_model(
+                X_train[selected.features],
+                y_train,
+                X_test[selected.features],
+                y_test,
+                self.model_type,
+                selected.model_config,
+                model_params=self.model_params,
+            )
+            final = SearchResult(
+                config_id=selected.config_id,
+                strategy=selected.strategy,
+                n_features=selected.n_features,
+                n_base=selected.n_base,
+                n_context=selected.n_context,
+                rmse=metrics["rmse"],
+                r2=metrics["r2"],
+                mae=metrics["mae"],
+                features=selected.features,
+                model_config=selected.model_config,
+                feature_importance=importance,
+                eval_set="test",
+                val_rmse=selected.rmse,
+                val_r2=selected.r2,
+                val_mae=selected.mae,
+            )
+            test_eval_cache[cache_key] = final
+            return final
+
+        best_rmse = _evaluate_on_test(best_val_rmse)
+        best_r2 = _evaluate_on_test(best_val_r2)
+        baseline_result = (
+            _evaluate_on_test(best_val_baseline) if best_val_baseline is not None else best_rmse
+        )
+
+        # Feature usage in top 20 models (by validation RMSE)
         top_20 = sorted(self.results_, key=lambda r: r.rmse)[:20]
         feature_usage = {}
         for r in top_20:
@@ -371,7 +488,7 @@ class FeatureCombinationSearch:
             all_results=self.results_,
             best_by_rmse=best_rmse,
             best_by_r2=best_r2,
-            baseline_result=baseline_result or self.results_[0],
+            baseline_result=baseline_result,
             feature_usage=feature_usage,
         )
 
