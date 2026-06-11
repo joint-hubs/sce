@@ -46,7 +46,7 @@ COLORS = {
 
 PROJECT_ROOT = Path(__file__).parent.parent
 RESULTS_FILE = PROJECT_ROOT / "results" / "experiment_results.json"
-OUTPUT_DIR = PROJECT_ROOT / "results" / "figures"
+OUTPUT_DIR = PROJECT_ROOT / "docs" / "figures" / "paper"
 
 
 def load_results() -> list[dict[str, Any]]:

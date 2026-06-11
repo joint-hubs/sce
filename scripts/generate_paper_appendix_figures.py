@@ -144,7 +144,10 @@ def load_run_artifacts(run_dir: Path, configs_root: Path | None = None) -> dict[
         if config_path.exists():
             with open(config_path, "rb") as f:
                 artifacts["config"] = tomllib.load(f)
-    pruning_path = data_dir / "xgb_pruning_trace.csv"
+    pruning_path = data_dir / "pruning_trace.csv"
+    if not pruning_path.exists():
+        candidates = sorted(data_dir.glob("*_pruning_trace.csv"))
+        pruning_path = candidates[0] if candidates else data_dir / "xgb_pruning_trace.csv"
     if pruning_path.exists():
         artifacts["pruning"] = pd.read_csv(pruning_path)
     stats_path = data_dir / "lm_context_statistics.csv"
@@ -539,7 +542,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Generate main paper + appendix figures")
     parser.add_argument("--results-root", type=Path, default=Path(__file__).parent.parent / "results")
     parser.add_argument("--configs-root", type=Path, default=Path(__file__).parent.parent / "configs")
-    parser.add_argument("--output-root", type=Path, default=Path(__file__).parent.parent.parent / "docs" / "figures")
+    parser.add_argument("--output-root", type=Path, default=Path(__file__).parent.parent / "docs" / "figures")
     parser.add_argument("--paper-only", action="store_true", help="Only generate main paper figures")
     parser.add_argument("--appendix-only", action="store_true", help="Only generate appendix figures")
     parser.add_argument("--tables-only", action="store_true", help="Only generate Table 1 and Table 2 figures")
