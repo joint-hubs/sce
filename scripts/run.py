@@ -312,8 +312,11 @@ def _evaluate_promotion(
     blocked_by: list[str] = []
     if run_grade == "report-grade":
         for diag_name in ["permuted_target", "shuffled_groups", "crossfit_ab", "feature_dominance"]:
-            if diagnostics.get(diag_name) is None:
+            payload = diagnostics.get(diag_name)
+            if payload is None:
                 blocked_by.append(f"missing_diagnostic:{diag_name}")
+            elif isinstance(payload, dict) and payload.get("pass") is False:
+                blocked_by.append(f"diagnostic_failed:{diag_name}")
 
         dominance = diagnostics.get("feature_dominance")
         if isinstance(dominance, dict) and dominance.get("dominated"):

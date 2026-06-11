@@ -153,6 +153,23 @@ def test_report_grade_blocks_when_diagnostics_missing(tmp_path: Path):
         )
 
 
+def test_report_grade_blocks_when_diagnostic_failed():
+    from scripts.run import _evaluate_promotion
+
+    promotion = _evaluate_promotion(
+        run_grade="report-grade",
+        target_col="price",
+        diagnostics={
+            "permuted_target": {"pass": False, "sce_advantage_permuted_mean": 3.1},
+            "shuffled_groups": {"pass": True},
+            "crossfit_ab": {"leakage_signal_pp": 1.0},
+            "feature_dominance": {"dominated": False},
+        },
+    )
+    assert promotion["promoted_to_report_grade"] is False
+    assert "diagnostic_failed:permuted_target" in promotion["blocked_by"]
+
+
 def test_report_grade_blocks_for_dominant_target_global_feature(tmp_path: Path):
     cfg = tmp_path / "sample.toml"
     cfg.write_text("[dataset]\npath='data.parquet'\n[target]\ncolumn='price'\n", encoding="utf-8")
