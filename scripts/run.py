@@ -54,7 +54,7 @@ from sce import (
 )
 from sce.config import AggregationMethod
 from sce.model_presets import SUPPORTED_MODEL_TYPES
-from sce.models import build_model, get_model_label, model_supports_gpu
+from sce.models import build_model, extract_feature_importance, get_model_label, model_supports_gpu
 
 PROJECT_ROOT = Path(__file__).parent.parent
 CONFIGS_DIR = PROJECT_ROOT / "configs"
@@ -273,6 +273,34 @@ def _is_target_global_feature(feature: str, target_col: str) -> bool:
     has_target_pattern = lowered.startswith(f"{target}_") or f"_{target}_" in lowered
     has_global_pattern = lowered.startswith("global_") or "_global_" in lowered or lowered.endswith("_global")
     return has_target_pattern and has_global_pattern
+
+
+def _load_latest_diagnostics(config_name: str) -> dict[str, Any]:
+    """Load the most recent saved diagnostic payload of each type for a dataset.
+
+    Diagnostics CLIs (scripts/diagnostics/*) persist their results under
+    ``results/diagnostics/<dataset>/<diagnostic>_<timestamp>.json``. Report-grade
+    promotion requires every diagnostic to be present.
+    """
+    diagnostics: dict[str, Any] = {
+        "permuted_target": None,
+        "shuffled_groups": None,
+        "crossfit_ab": None,
+        "feature_dominance": None,
+    }
+    base = PROJECT_ROOT / "results" / "diagnostics" / config_name
+    if not base.exists():
+        return diagnostics
+    for diag_name in list(diagnostics):
+        candidates = sorted(base.glob(f"{diag_name}_*.json"))
+        if not candidates:
+            continue
+        try:
+            diagnostics[diag_name] = json.loads(candidates[-1].read_text(encoding="utf-8"))
+            diagnostics[diag_name]["source_file"] = str(candidates[-1])
+        except (OSError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning("Could not load diagnostic %s: %s", candidates[-1], exc)
+    return diagnostics
 
 
 def _evaluate_promotion(
@@ -1406,9 +1434,7 @@ def run_search_experiment(
         n_rows_loaded=n_rows_loaded,
         n_rows_after_filter=n_rows_after_filter,
         diagnostics={
-            "permuted_target": None,
-            "shuffled_groups": None,
-            "crossfit_ab": None,
+            **_load_latest_diagnostics(config_name),
             "feature_dominance": feature_dominance,
         },
     )
@@ -1801,6 +1827,17 @@ def run_experiment(
         context_variant=context_variant,
         categorical_mode=categorical_mode,
     )
+
+    # Diagnostics for report-grade promotion: file-based diagnostics are loaded
+    # from results/diagnostics/<dataset>/, feature dominance is computed in-run
+    # from the trained SCE model's importance.
+    diagnostics = _load_latest_diagnostics(config_name)
+    importance_df = extract_feature_importance(sce_model, X_train_sce.columns)
+    importance_path = output_dir / "data" / "sce_feature_importance.csv"
+    importance_path.parent.mkdir(parents=True, exist_ok=True)
+    importance_df.to_csv(importance_path, index=False)
+    diagnostics["feature_dominance"] = audit_feature_dominance(importance_path)
+
     metadata = _collect_run_metadata(
         config_name=config_name,
         config_path=config_path,
@@ -1826,6 +1863,7 @@ def run_experiment(
         },
         n_rows_loaded=n_rows_loaded,
         n_rows_after_filter=n_rows_after_filter,
+        diagnostics=diagnostics,
     )
     with (output_dir / "data" / "metadata.json").open("w") as f:
         json.dump(metadata, f, indent=2, default=str)
