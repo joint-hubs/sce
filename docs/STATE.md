@@ -28,6 +28,20 @@
 - **Working tree:** clean as of 2026-06-11; main is ahead of `origin/main`
   (push pending — see next steps).
 
+## Report-grade status (2026-06-11, post search-fix, git f6c427a0)
+
+| Dataset | Diagnostics | Report-grade run | RMSE improvement (test, unbiased) |
+|---|---|---|---|
+| rental_poland_short | full, all pass | **PROMOTED** | **+10.97%** |
+| m5_store_dept_daily | full, all pass | **PROMOTED** | +1.14% |
+| melbourne_housing | full, all pass | **PROMOTED** | +2.19% |
+| rental_poland_long | permuted+shuffled **FAIL** | BLOCKED (correct) | +1.22% real ≈ noise (permuted gives +3.1%) |
+| walmart / rossmann / UAE ×2 | 20k-subsample diagnostics queued | pending | — |
+
+Honest takeaway: poland_long's SCE advantage is within noise at n≈1000 — the
+gate caught it. Promotion also now requires every diagnostic to report
+`pass=true` (`diagnostic_failed:*` blocks).
+
 ## What is NOT done (next steps, in order)
 
 Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
