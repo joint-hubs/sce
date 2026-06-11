@@ -1,0 +1,19 @@
+# Rolling-window report defaults for temporal datasets.
+# Purpose: single place to document fixed windows used in report-grade runs.
+
+[policy]
+name = "rolling_window_report_defaults"
+train_to_validation_ratio = "4:1"
+notes = "Outer split stays 80/20 in dataset configs; these values are for inner rolling cross-fit only."
+
+[datasets.rossmann_daily.sce]
+cross_fit_strategy = "rolling"
+rolling_max_train_size = 400000
+rolling_test_size = 100000
+rolling_gap = 0
+
+[datasets.walmart_weekly.sce]
+cross_fit_strategy = "rolling"
+rolling_max_train_size = 180000
+rolling_test_size = 30000
+rolling_gap = 0
