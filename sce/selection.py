@@ -1,6 +1,6 @@
 """
 @module: sce.selection
-@depends: scipy, sklearn
+@depends: numpy, pandas, scipy, sklearn
 @exports: LMFeatureSelector, compute_lm_statistics, select_significant_features
 @paper_ref: Section 4.2 Feature Selection
 @data_flow: features -> LM statistics -> p-value filtering -> selected_features

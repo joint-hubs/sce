@@ -1,9 +1,9 @@
 """
 @module: sce.engine
-@depends: sce.config, sce.stats, sce.meta
+@depends: sce.cleanup, sce.config, sce.meta, sce.stats
 @exports: StatisticalContextEngine
 @paper_ref: Algorithm 1, Equations 3.1-3.4
-@data_flow: raw_df -> enriched_df -> model_ready_features
+@data_flow: raw_df -> grouped statistics -> enriched_df -> optional cleanup -> model_ready_features
 """
 
 import logging
@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, TimeSeriesSplit
 
 from sce.cleanup import FeatureCleanupPipeline
 from sce.config import ContextConfig
@@ -72,6 +72,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         self._cleanup_pipeline: Optional[FeatureCleanupPipeline] = None
         self._cleanup_removed_features: Optional[List[str]] = None
         self._cleanup_report = None
+        self._last_fold_timestamps: List[dict[str, object]] = []
 
     def fit(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> "StatisticalContextEngine":
         """
@@ -90,11 +91,15 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         Raises:
             ValueError: If required columns are missing
         """
-        logger.debug(f"Fitting SCE engine on {len(X)} rows, {len(X.columns)} columns")
-        self._validate_input(X)
+        X_prepared, _ = self._prepare_input_frame(X, y=y, require_target=True)
+
+        logger.debug(
+            f"Fitting SCE engine on {len(X_prepared)} rows, {len(X_prepared.columns)} columns"
+        )
+        self._validate_input(X_prepared)
 
         # Get categorical columns (auto-detect or from config)
-        self._categorical_cols = self.config.get_categorical_cols(X)
+        self._categorical_cols = self.config.get_categorical_cols(X_prepared)
 
         min_required = self.config.min_categorical_columns
         if min_required > 0 and len(self._categorical_cols) < min_required:
@@ -119,8 +124,8 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
 
             # Log cardinality of each categorical column
             for col in self._categorical_cols:
-                if col in X.columns:
-                    unique_count = X[col].nunique()
+                if col in X_prepared.columns:
+                    unique_count = X_prepared[col].nunique()
                     logger.debug(f"  Column '{col}': {unique_count} unique values")
         else:
             logger.warning("No categorical columns detected or specified")
@@ -136,7 +141,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         )
 
         self._stats_dict = compute_aggregations(
-            df=X,
+            df=X_prepared,
             categorical_cols=self._categorical_cols,
             target_col=self.config.target_col,
             methods=self.config.aggregations,
@@ -174,8 +179,21 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         if not self._fitted or self._stats_dict is None:
             raise RuntimeError("Must call fit() before transform()")
 
+        input_has_target = self.config.target_col in X.columns
+
+        if not input_has_target:
+            if self.config.include_relative_features:
+                raise ValueError(
+                    "Transform requires the target column when include_relative_features=True."
+                )
+            if self.config.cleanup_config is not None and self._cleanup_removed_features is None:
+                raise ValueError(
+                    "Transform requires the target column on the first cleanup-enabled transform. "
+                    "Call fit_transform on training data first, or transform data that includes the target."
+                )
+
         logger.debug(f"Transforming {len(X)} rows")
-        self._validate_input(X)
+        self._validate_input(X, require_target=input_has_target)
 
         # Start with copy of input (preserves index)
         result = X.copy()
@@ -267,12 +285,19 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         Returns:
             Enriched dataframe with leakage-safe context features
         """
+        X_prepared, input_has_target = self._prepare_input_frame(X, y=y, require_target=True)
+
         if self.config.use_cross_fitting:
             # Use cross-fitting for leakage-safe context
-            return self._fit_transform_cross_fitted(X)
+            enriched = self._fit_transform_cross_fitted(X_prepared)
         else:
             # Standard fit-transform (may leak in-sample)
-            return self.fit(X, y).transform(X)
+            enriched = self.fit(X_prepared, y=None).transform(X_prepared)
+
+        if not input_has_target and self.config.target_col in enriched.columns:
+            return enriched.drop(columns=[self.config.target_col])
+
+        return enriched
 
     def _fit_transform_cross_fitted(self, X: pd.DataFrame) -> pd.DataFrame:
         """
@@ -300,14 +325,145 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
         # Reset index to avoid duplicate index issues during concat
         X_reset = X.reset_index(drop=True)
 
-        kf = KFold(n_splits=self.config.n_folds, shuffle=True, random_state=42)
-        fold_indices = list(kf.split(X_reset))
+        strategy = self.config.cross_fit_strategy
+
+        if strategy in {"time", "rolling"}:
+            time_col = self.config.time_col
+            if not time_col or time_col not in X_reset.columns:
+                raise ValueError(
+                    "temporal cross-fit strategy requires time_col present in input dataframe"
+                )
+            sorted_positions = X_reset.sort_values(time_col, kind="mergesort").index.to_numpy()
+            X_cf = X_reset.iloc[sorted_positions].reset_index(drop=True)
+            if strategy == "rolling":
+                resolved_test_size = self.config.rolling_test_size
+                if resolved_test_size is None:
+                    resolved_test_size = max(1, len(X_cf) // (self.config.n_folds + 1))
+
+                resolved_max_train_size = self.config.rolling_max_train_size
+                if resolved_max_train_size is None:
+                    resolved_max_train_size = max(2 * resolved_test_size, int(len(X_cf) * 0.8))
+
+                splitter = TimeSeriesSplit(
+                    n_splits=self.config.n_folds,
+                    max_train_size=resolved_max_train_size,
+                    test_size=resolved_test_size,
+                    gap=self.config.rolling_gap,
+                )
+            else:
+                splitter = TimeSeriesSplit(n_splits=self.config.n_folds)
+            fold_indices = list(splitter.split(X_cf))
+            cf_to_original_pos = sorted_positions
+        else:
+            splitter = KFold(
+                n_splits=self.config.n_folds,
+                shuffle=True,
+                random_state=self.config.random_state,
+            )
+            X_cf = X_reset
+            fold_indices = list(splitter.split(X_cf))
+            cf_to_original_pos = np.arange(len(X_reset))
+
         fold_results = {}
+        self._last_fold_timestamps = []
+
+        if strategy in {"time", "rolling"}:
+            for train_idx, val_idx in fold_indices:
+                train_df = X_cf.iloc[train_idx]
+                val_df = X_cf.iloc[val_idx].copy()
+
+                stats_dict = compute_aggregations(
+                    df=train_df,
+                    categorical_cols=self._categorical_cols,
+                    target_col=self.config.target_col,
+                    methods=self.config.aggregations,
+                    min_group_size=self.config.min_group_size,
+                    include_global=self.config.include_global_stats,
+                    include_interactions=self.config.include_interactions,
+                    max_interaction_depth=self.config.max_interaction_depth,
+                )
+
+                for level_name, stats_df in stats_dict.items():
+                    if level_name == "global":
+                        val_df = self._join_global_stats(val_df, stats_df)
+                    else:
+                        group_cols = _level_name_to_cols(level_name)
+                        val_df = self._join_level_stats(val_df, stats_df, group_cols, level_name)
+
+                val_df = apply_hierarchical_backoff(
+                    df=val_df,
+                    stats_dict=stats_dict,
+                    categorical_cols=self._categorical_cols,
+                    target_col=self.config.target_col,
+                    add_backoff_depth=self.config.add_backoff_depth,
+                )
+
+                if self.config.include_relative_features:
+                    val_df = compute_relative_features(
+                        df=val_df,
+                        stats_dict=stats_dict,
+                        categorical_cols=self._categorical_cols,
+                        target_col=self.config.target_col,
+                    )
+
+                if self.config.time_col is not None:
+                    self._last_fold_timestamps.append(
+                        {
+                            "train_size": int(len(train_df)),
+                            "val_size": int(len(val_df)),
+                            "train_max": train_df[self.config.time_col].max(),
+                            "val_min": val_df[self.config.time_col].min(),
+                            "val_max": val_df[self.config.time_col].max(),
+                        }
+                    )
+
+                original_positions = cf_to_original_pos[val_idx]
+                for i, orig_pos in enumerate(original_positions):
+                    fold_results[int(orig_pos)] = val_df.iloc[i]
+
+            for pos in range(len(X_reset)):
+                if pos not in fold_results:
+                    fold_results[pos] = X_reset.iloc[pos]
+
+            enriched = pd.DataFrame([fold_results[i] for i in range(len(X_reset))])
+            enriched.index = original_index
+
+            self._stats_dict = compute_aggregations(
+                df=X,
+                categorical_cols=self._categorical_cols,
+                target_col=self.config.target_col,
+                methods=self.config.aggregations,
+                min_group_size=self.config.min_group_size,
+                include_global=self.config.include_global_stats,
+                include_interactions=self.config.include_interactions,
+                max_interaction_depth=self.config.max_interaction_depth,
+            )
+            self._fitted = True
+
+            if self.config.cleanup_config is not None:
+                if self._cleanup_pipeline is None:
+                    self._cleanup_pipeline = FeatureCleanupPipeline(self.config.cleanup_config)
+                if (
+                    self._cleanup_removed_features is None
+                    and self.config.target_col in enriched.columns
+                ):
+                    features = enriched.drop(columns=[self.config.target_col])
+                    _, report = self._cleanup_pipeline.fit_transform(
+                        features,
+                        enriched[self.config.target_col],
+                        target_col=self.config.target_col,
+                    )
+                    self._cleanup_removed_features = self._cleanup_pipeline.removed_features_
+                    self._cleanup_report = report
+                if self._cleanup_removed_features:
+                    enriched = enriched.drop(columns=self._cleanup_removed_features, errors="ignore")
+
+            return enriched
 
         # Phase 1: compute stats for each fold separately
         per_fold_stats: List[Dict[str, pd.DataFrame]] = []
         for _, val_idx in fold_indices:
-            fold_df = X_reset.iloc[val_idx]
+            fold_df = X_cf.iloc[val_idx]
             fold_stats = compute_aggregations(
                 df=fold_df,
                 categorical_cols=self._categorical_cols,
@@ -331,7 +487,7 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                 variance_features=self.config.fold_variance_features,
             )
 
-            val_df = X_reset.iloc[val_idx].copy()
+            val_df = X_cf.iloc[val_idx].copy()
 
             for level_name, stats_df in stats_dict.items():
                 if level_name == "global":
@@ -356,8 +512,9 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                     target_col=self.config.target_col,
                 )
 
-            for idx, row_idx in enumerate(val_idx):
-                fold_results[row_idx] = val_df.iloc[idx]
+            original_positions = cf_to_original_pos[val_idx]
+            for idx, orig_pos in enumerate(original_positions):
+                fold_results[int(orig_pos)] = val_df.iloc[idx]
 
         # Reconstruct in original order
         enriched = pd.DataFrame([fold_results[i] for i in range(len(X_reset))])
@@ -562,9 +719,30 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
 
         return result
 
-    def _validate_input(self, X: pd.DataFrame) -> None:
+    def _prepare_input_frame(
+        self,
+        X: pd.DataFrame,
+        y: Optional[pd.Series] = None,
+        require_target: bool = True,
+    ) -> tuple[pd.DataFrame, bool]:
+        """Return an input frame with the target attached when supplied separately."""
+        input_has_target = self.config.target_col in X.columns
+        if input_has_target:
+            return X.copy(), True
+
+        if y is None:
+            if require_target:
+                raise ValueError(f"Missing target column: {self.config.target_col}")
+            return X.copy(), False
+
+        y_series = pd.Series(y, index=getattr(y, "index", X.index), name=self.config.target_col)
+        prepared = X.copy()
+        prepared[self.config.target_col] = y_series.reindex(X.index)
+        return prepared, False
+
+    def _validate_input(self, X: pd.DataFrame, require_target: bool = True) -> None:
         """Validate input dataframe has required columns."""
-        if self.config.target_col not in X.columns:
+        if require_target and self.config.target_col not in X.columns:
             raise ValueError(f"Missing target column: {self.config.target_col}")
 
         # If categorical_cols specified manually, check they exist

@@ -7,11 +7,23 @@
 """
 
 from sce.cleanup import FeatureCleanupPipeline
+from sce.baselines import (
+    SUPPORTED_CONTEXT_VARIANTS,
+    get_context_variant_label,
+    resolve_context_variant_methods,
+)
 from sce.config import AggregationMethod, CleanupConfig, ContextConfig, detect_categorical_columns
 from sce.engine import StatisticalContextEngine
 from sce.importance import aggregate_importance, run_iterative_pruning
-from sce.model_presets import load_xgboost_presets, resolve_xgboost_presets
-from sce.pipeline import fit_context_pipeline
+from sce.model_presets import (
+    SUPPORTED_MODEL_TYPES,
+    load_model_presets,
+    load_xgboost_presets,
+    resolve_model_presets,
+    resolve_xgboost_presets,
+)
+from sce.models import build_model, get_model_label, model_supports_gpu
+from sce.pipeline import create_sce_pipeline, fit_context_pipeline
 from sce.search import FeatureCombinationSearch, SearchResult, SearchSummary
 from sce.selection import LMFeatureSelector, compute_lm_statistics, select_significant_features
 
@@ -23,8 +35,12 @@ __all__ = [
     "AggregationMethod",
     "CleanupConfig",
     "detect_categorical_columns",
+    "create_sce_pipeline",
     "fit_context_pipeline",
     "FeatureCleanupPipeline",
+    "SUPPORTED_CONTEXT_VARIANTS",
+    "get_context_variant_label",
+    "resolve_context_variant_methods",
     # Feature selection
     "LMFeatureSelector",
     "compute_lm_statistics",
@@ -34,7 +50,13 @@ __all__ = [
     "SearchResult",
     "SearchSummary",
     # Model presets
+    "SUPPORTED_MODEL_TYPES",
+    "build_model",
+    "get_model_label",
+    "model_supports_gpu",
+    "load_model_presets",
     "load_xgboost_presets",
+    "resolve_model_presets",
     "resolve_xgboost_presets",
     # Importance + pruning
     "aggregate_importance",

@@ -1,7 +1,7 @@
 """
 @module: sce.importance
-@depends: pandas, numpy
-@exports: aggregate_importance, run_iterative_pruning
+@depends: numpy, pandas, sce.search
+@exports: PruningResult, aggregate_importance, run_iterative_pruning
 @data_flow: search_results -> importance_stats -> pruning_trace
 """
 
@@ -83,6 +83,7 @@ def run_iterative_pruning(
     X_test: pd.DataFrame,
     y_test: pd.Series,
     features: List[str],
+    model_type: str = "xgboost",
     model_config_name: str = "default",
     model_params: Optional[Dict[str, Dict[str, object]]] = None,
     step_pct_keep: Iterable[float] = (1.0, 0.8, 0.6, 0.4, 0.2),
@@ -91,7 +92,8 @@ def run_iterative_pruning(
     results: List[PruningResult] = []
     removed_records: List[Dict[str, object]] = []
 
-    current_features = [f for f in features if f in X_train.columns]
+    common_feature_names = set(X_train.columns).intersection(X_test.columns)
+    current_features = [f for f in features if f in common_feature_names]
 
     for pct in step_pct_keep:
         if not current_features:
@@ -103,7 +105,7 @@ def run_iterative_pruning(
             y_train,
             X_test[current_features],
             y_test,
-            model_type="xgboost",
+            model_type=model_type,
             config_name=model_config_name,
             model_params=model_params,
         )

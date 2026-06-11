@@ -1,6 +1,6 @@
 """
 @module: sce.pipeline
-@depends: sce.engine, sce.config
+@depends: sklearn, sce.config, sce.engine
 @exports: fit_context_pipeline, create_sce_pipeline
 @paper_ref: Section 6 (Implementation)
 @data_flow: raw_df -> sce_features -> model -> predictions
@@ -28,12 +28,19 @@ def create_sce_pipeline(config: ContextConfig, model: Optional[BaseEstimator] = 
         sklearn Pipeline with SCE transformer and optional model
 
     Example:
-        >>> from xgboost import XGBRegressor
+        >>> from sklearn.ensemble import RandomForestRegressor
         >>> from sce import ContextConfig, create_sce_pipeline
         >>>
-        >>> config = ContextConfig(hierarchy=["region", "city"], target_col="price")
-        >>> pipeline = create_sce_pipeline(config, model=XGBRegressor())
-        >>> pipeline.fit(train_df, train_df["price"])
+        >>> config = ContextConfig(categorical_cols=["region", "city"], target_col="price")
+        >>> pipeline = create_sce_pipeline(config, model=RandomForestRegressor())
+        >>> X_train = train_df.drop(columns=["price"])
+        >>> y_train = train_df["price"]
+        >>> pipeline.fit(X_train, y_train)
+
+    Note:
+        The SCE step augments the feature matrix, but it does not encode raw string
+        columns for downstream estimators. If your model cannot consume string-valued
+        columns directly, encode or preprocess them before fitting the final model.
     """
     steps = [("sce", StatisticalContextEngine(config))]
 
@@ -63,11 +70,12 @@ def fit_context_pipeline(
     """
     pipeline = create_sce_pipeline(config, model)
 
+    y = df[config.target_col]
+    X = df.drop(columns=[config.target_col])
+
     if model is not None:
-        y = df[config.target_col]
-        X = df.drop(columns=[config.target_col])
         pipeline.fit(X, y, **fit_params)
     else:
-        pipeline.fit(df)
+        pipeline.fit(X, y)
 
     return pipeline

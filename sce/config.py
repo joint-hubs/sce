@@ -1,9 +1,9 @@
 """
 @module: sce.config
-@depends:
-@exports: ContextConfig, AggregationMethod, detect_categorical_columns
+@depends: pandas
+@exports: AggregationMethod, CleanupConfig, ContextConfig, detect_categorical_columns
 @paper_ref: Section 3.1
-@data_flow: user config -> validated parameters
+@data_flow: dataset schema + user options -> validated config -> grouping rules
 """
 
 from dataclasses import dataclass, field
@@ -172,7 +172,13 @@ class ContextConfig:
         aggregations: List of aggregation methods to apply
         min_group_size: Minimum samples required per group
         use_cross_fitting: Whether to apply out-of-fold aggregation (prevents leakage)
+        cross_fit_strategy: Cross-fit splitter strategy (random/time/rolling/off)
+        time_col: Time column required for temporal cross-fitting
         n_folds: Number of folds for cross-fitting
+        random_state: Seed for randomized splitters
+        rolling_max_train_size: Max rolling train window size (rows), None = expanding
+        rolling_test_size: Rolling validation window size (rows), None = sklearn default
+        rolling_gap: Gap between rolling train and validation windows
         include_fold_variance: Whether to add fold-variance uncertainty features
         fold_variance_features: Which variance features to include (std/lower/upper/cv)
         include_relative_features: Whether to compute z-score/ratio features.
@@ -218,7 +224,13 @@ class ContextConfig:
     )
     min_group_size: int = 5
     use_cross_fitting: bool = True
+    cross_fit_strategy: Literal["random", "time", "rolling", "off"] = "random"
+    time_col: Optional[str] = None
     n_folds: int = 5
+    random_state: int = 42
+    rolling_max_train_size: Optional[int] = None
+    rolling_test_size: Optional[int] = None
+    rolling_gap: int = 0
     include_fold_variance: bool = True
     fold_variance_features: List[str] = field(default_factory=lambda: ["std", "lower", "upper"])
     include_relative_features: bool = False  # WARNING: Causes target leakage!
@@ -244,6 +256,16 @@ class ContextConfig:
             raise ValueError("min_group_size must be at least 1")
         if self.min_categorical_columns < 0:
             raise ValueError("min_categorical_columns must be at least 0")
+        if self.cross_fit_strategy in {"time", "rolling"} and not self.time_col:
+            raise ValueError("cross_fit_strategy in {'time','rolling'} requires time_col to be set")
+        if self.cross_fit_strategy == "off" and self.use_cross_fitting:
+            raise ValueError("cross_fit_strategy='off' is incompatible with use_cross_fitting=True")
+        if self.rolling_max_train_size is not None and self.rolling_max_train_size < 1:
+            raise ValueError("rolling_max_train_size must be >= 1 when set")
+        if self.rolling_test_size is not None and self.rolling_test_size < 1:
+            raise ValueError("rolling_test_size must be >= 1 when set")
+        if self.rolling_gap < 0:
+            raise ValueError("rolling_gap must be >= 0")
 
         allowed_variance_features = {"std", "lower", "upper", "cv"}
         if any(v not in allowed_variance_features for v in self.fold_variance_features):

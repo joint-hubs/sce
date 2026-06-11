@@ -1,9 +1,9 @@
 """
 @module: sce.search
-@depends: xgboost
-@exports: ModelSearcher, FeatureCombinationSearch, SearchResult
+@depends: numpy, pandas, sklearn, sce.model_presets, sce.models
+@exports: FeatureCombinationSearch, SearchResult, SearchSummary, train_model
 @paper_ref: Section 4.3 Model Selection
-@data_flow: features -> random combinations -> train models -> best_config
+@data_flow: feature subsets -> model presets -> trained estimators -> ranked search results
 @status: EXPERIMENTAL - Test coverage 21%. Not recommended for production use.
 
 Random search over feature combinations with multiple model configurations.
@@ -20,6 +20,9 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from sce.model_presets import load_model_presets
+from sce.models import build_model, extract_feature_importance
 
 
 @dataclass
@@ -63,9 +66,11 @@ def train_model(
     Train a model and compute metrics.
 
     Args:
-        X_train, y_train: Training data
-        X_test, y_test: Test data
-        model_type: 'xgboost' or 'ridge'
+        X_train: Training features
+        y_train: Training targets
+        X_test: Test features
+        y_test: Test targets
+        model_type: Supported downstream model type.
         config_name: Model configuration name
 
     Returns:
@@ -84,35 +89,13 @@ def train_model(
     if len(X_train) == 0 or len(X_test) == 0:
         raise ValueError("No rows left after dropping missing values")
 
-    if model_type != "xgboost":
-        raise ValueError("Only 'xgboost' is supported for model search")
+    config_source = model_params or load_model_presets(model_type)
+    params = dict(config_source.get(config_name, config_source["default"]))
 
-    try:
-        from xgboost import XGBRegressor
-    except ImportError as exc:
-        raise ImportError("xgboost is required for model search") from exc
-
-    default_configs = {
-        "default": {"n_estimators": 100, "max_depth": 6, "learning_rate": 0.1},
-        "shallow": {"n_estimators": 200, "max_depth": 3, "learning_rate": 0.05},
-        "boosted": {"n_estimators": 300, "max_depth": 5, "learning_rate": 0.03},
-    }
-    config_source = model_params or default_configs
-    params = dict(config_source.get(config_name, default_configs["default"]))
-
-    # Add defaults if not already present
-    params.setdefault("subsample", 0.8)
-    params.setdefault("colsample_bytree", 0.8)
-    params.setdefault("random_state", 42)
-    params.setdefault("n_jobs", -1)
-    params.setdefault("verbosity", 0)
-
-    model = XGBRegressor(**params)
+    model = build_model(model_type, params)
     model.fit(X_train, y_train)
 
-    importance = pd.DataFrame(
-        {"feature": X_train.columns, "importance": model.feature_importances_}
-    ).sort_values("importance", ascending=False)
+    importance = extract_feature_importance(model, X_train.columns)
 
     # Predictions and metrics
     y_pred = model.predict(X_test)
@@ -172,7 +155,7 @@ class FeatureCombinationSearch:
             min_samples: Minimum number of configurations to test
             max_samples: Maximum number of configurations to test
             model_configs: List of model config names to test
-            model_type: 'xgboost' only
+            model_type: Supported downstream model type.
             random_state: Random seed for reproducibility
             run_ablation: Whether to run ablation experiments (remove best/worst)
             run_significance_selection: Whether to run LM/tree significance selection
@@ -183,7 +166,7 @@ class FeatureCombinationSearch:
         self.sampling_pct = sampling_pct
         self.min_samples = min_samples
         self.max_samples = max_samples
-        self.model_configs = model_configs or ["default", "shallow", "boosted"]
+        self.model_configs = model_configs or list(load_model_presets(model_type).keys())
         self.model_params = model_params
         self.model_type = model_type
         self.random_state = random_state
@@ -268,8 +251,10 @@ class FeatureCombinationSearch:
         Run the feature combination search.
 
         Args:
-            X_train, y_train: Training data
-            X_test, y_test: Test data
+                X_train: Training features
+                y_train: Training targets
+                X_test: Test features
+                y_test: Test targets
             progress_callback: Optional callback(current, total) for progress
 
         Returns:
@@ -297,10 +282,11 @@ class FeatureCombinationSearch:
         self.feature_gains_ = {}
         config_id = 0
         baseline_result = None
+        common_feature_names = set(X_train.columns).intersection(X_test.columns)
 
         for strategy, base_subset, context_subset in combinations:
             features = list(base_subset) + list(context_subset)
-            features = [f for f in features if f in X_train.columns]
+            features = [f for f in features if f in common_feature_names]
 
             if not features:
                 continue

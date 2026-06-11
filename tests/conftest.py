@@ -2,14 +2,14 @@
 import sys
 from pathlib import Path
 
+# Add repo root first so tests resolve local `sce` package, not a site-packages install.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from sce.config import AggregationMethod, ContextConfig
-
-# Add sce to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 @pytest.fixture

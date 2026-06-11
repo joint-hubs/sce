@@ -1,6 +1,6 @@
 """
 @module: sce.cleanup
-@depends: sce.config
+@depends: numpy, pandas, sce.config
 @exports: FeatureCleanupPipeline, CleanupReport
 @paper_ref: Not in paper (utility module)
 @data_flow: features -> cleanup steps -> reduced feature set

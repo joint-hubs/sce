@@ -1,9 +1,9 @@
 """
 @module: sce.stats
-@depends: sce.config
-@exports: StatsAggregator, compute_aggregations
+@depends: numpy, pandas, sce.config
+@exports: StatsAggregator, apply_hierarchical_backoff, build_fallback_chains, compute_aggregations, compute_relative_features
 @paper_ref: Equations 3.1-3.4
-@data_flow: grouped_df -> aggregated_statistics -> enriched_features
+@data_flow: categorical groups -> aggregated statistics -> backoff and relative features -> enriched features
 """
 
 import logging
