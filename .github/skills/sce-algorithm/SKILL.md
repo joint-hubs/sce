@@ -13,6 +13,9 @@ description: Statistical Context Engineering algorithm implementation and verifi
 | Core engine | sce/engine.py |
 | Statistics | sce/stats.py |
 | Config | sce/config.py |
+| Evaluation protocol | scripts/run.py (`_run_sce_enrichment`, `_split_dataset`) |
+| Leakage diagnostics | scripts/diagnostics/ |
+| Guard tests | tests/test_leakage_guards.py, tests/test_no_pre_split_fit.py |
 
 ## When to Use This Skill
 
@@ -28,81 +31,88 @@ description: Statistical Context Engineering algorithm implementation and verifi
 4. Check leakage prevention logic (cross-fitting, target exclusion).
 5. Record gaps or deviations as TODOs and create tests for them.
 
-## Common Patterns
+## Evaluation Protocol (BINDING — do not regress)
 
-### Group stats computation
-- Group-by on hierarchical keys
-- Aggregate numeric columns with mean/median/quantiles
-- Join back as prefixed features
+This section supersedes all guidance dated 2026-01-16 that previously lived
+here. The remediation plan `docs/plan/2026-04-18_leakage_safe_remediation_plan.md`
+is the source of truth.
 
-### Relative features
-- Ratios or z-scores computed from group statistics
-- Never compute target-relative features for supervised training
+1. **Split FIRST, then enrich.** The sequence is: Load → Sample → **Split** →
+   fit SCE on train only → transform test with train-derived statistics.
+   Enriching before the split lets test-set targets flow into features and
+   inflates results. (Earlier versions of this document claimed the opposite —
+   that guidance was wrong and produced the inflated pre-2026-04 numbers.)
+2. **No target-derived features in evaluation.** Ratio features
+   (`y / group_mean`) and any feature computed from the row's own target are
+   prohibited in evaluation runs. `include_relative_features` stays off.
+3. **Temporal data requires temporal cross-fit.** `split.strategy = "temporal"`
+   with random KFold cross-fitting is a hard error (`scripts/run.py` guard).
+   Use `cross_fit_strategy = "time"` or `"rolling"` with `time_col` set.
+4. **Train-only preprocessing.** Categorical encoding, pruning, and cleanup are
+   fit on the training partition only and applied to test.
+5. **Search selection never touches the test set.** `FeatureCombinationSearch`
+   scores candidates on an internal validation split (`val_fraction`,
+   `val_strategy="tail"` for temporal data); only the selected winners are
+   refit on full train and evaluated once on test (`eval_set="test"`).
+6. **Run provenance.** Every run writes `metadata.json` (git SHA, config hash,
+   seed, `run_grade`). Paper numbers come only from `run_grade=report-grade`
+   runs.
 
 ## Leakage Checklist
 
-- Are any aggregates computed from `target`? (should be cross-fitted)
-- Are relative features using `target`? (should be avoided)
+- Are any aggregates computed from `target`? (must be cross-fitted, OOF)
+- Are relative features using `target`? (prohibited in evaluation)
 - Are folds disjoint and applied before aggregation?
+- Does the temporal variant ever use future rows for statistics? (must not)
+- Is any model/feature selection decision based on test metrics? (must not)
 
-## Gaps To Watch
+## Diagnostics (run before trusting any result)
 
-**✅ RESOLVED (2026-01-15):** Cross-fitting is now fully implemented in `sce/engine.py` via the `_fit_transform_cross_fitted()` method. Out-of-fold aggregation prevents target leakage as specified in Equation 4.
+| Diagnostic | Tool | Pass criterion |
+|---|---|---|
+| Permuted target | `scripts/diagnostics/permuted_target.py` | SCE improvement ≈ 0 on shuffled targets |
+| Shuffled groups | `scripts/diagnostics/shuffled_groups.py` | Context features lose predictive power |
+| Cross-fit A/B | `scripts/diagnostics/crossfit_ab.py` | OOF vs naive gap quantified and reported |
+| Feature dominance | `scripts/diagnostics/feature_dominance.py` | No single context feature dominates importance |
 
-**✅ RESOLVED (2026-01-15):** Target-based context statistics are correctly computed. The engine aggregates the target column (`target_col`) across hierarchy groups, matching paper specifications.
+## Common Patterns
 
-**✅ RESOLVED (2026-01-16):** Hierarchical backoff implemented in `sce/stats.py` via `apply_hierarchical_backoff()`. Per paper Section 3.4, observations in small groups now receive context statistics from coarser hierarchy levels. This improved average RMSE reduction from +29.70% to +56.40%.
+### Group stats computation
+- Group-by on categorical keys (single columns + interactions)
+- Aggregate the target with mean/median/std/quantiles/count
+- Join back as prefixed features (`{level}__{stat}`)
 
-**✅ RESOLVED (2026-01-16): Ratio features now implemented correctly:**
-- The paper's ratio features (Eq. 3) `ratio = y_t / μ_k` compare target to group mean
-- These are computed on the FULL dataset BEFORE train/test split
-- This is NOT leakage because the split happens AFTER enrichment
-- **Implementation:** `create_ratio_features()` in `scripts/run.py`
+### Hierarchical backoff
+- Small groups receive statistics from coarser levels (sce/stats.py,
+  `apply_hierarchical_backoff`), global stats as final fallback.
 
-**✅ RESOLVED (2026-01-16): Model choice matters for SCE features:**
-- Ridge regression (linear model) does NOT work well with SCE features
-- XGBoost (tree-based) correctly leverages the hierarchical interactions
-- **FIX:** Always use XGBoost or tree-based models with SCE enrichment
+### Cross-fitting (Equation 4)
+- `StatisticalContextEngine._fit_transform_cross_fitted`: row t's features come
+  from folds that exclude t. Temporal variants use `TimeSeriesSplit` so
+  statistics never come from the future; earliest rows may stay unenriched
+  (NaN → dropped downstream — report the count).
 
-**✅ RESOLVED (2026-01-16): SCE must be applied BEFORE train/test split:**
-- Applying SCE after split loses valuable context information
-- The correct order is: Load → Sample → SCE Enrich → Split → Train/Evaluate
-- This matches the paper methodology and produces massive improvements
+## Historical Note (results prior to 2026-04)
 
-**Current Status:** All equations (1-4) and Algorithm 1 verified against production code.
-
-**Current Results (Search Experiments 2026-01-19):**
-
-| Dataset | Baseline RMSE | Best SCE RMSE | Improvement | Features |
-|---------|---------------|---------------|-------------|----------|
-| Poland Long | 4,581 | 4,541 | +0.87% | 10 |
-| Poland Short | 27,368 | 22,541 | +17.64% | 37 |
-| UAE Contracts | 465,037 | 360,267 | +22.53% | 88 |
-| UAE Transactions | 32,489,660 | 26,353,228 | +18.89% | 31 |
-
-*Note: Best results use `base_context` strategy with feature selection.*
-
-## Extensions Beyond Paper
-
-**Global Level Statistics:** The implementation includes a "global" level that computes dataset-wide statistics (mean, std, median, etc.) in addition to hierarchy levels. This provides:
-- A baseline context for all observations
-- A final fallback for hierarchical backoff
-- Consistent with paper's variance reduction perspective (Eq. 5)
+Results generated before the leakage-safe remediation (including the
+"+56% RMSE reduction" figure and the 2026-01-19 search table that previously
+appeared here) used enrich-before-split and test-set-based selection. They are
+**not citable**. Regenerate all numbers with report-grade runs under the
+current protocol before using them anywhere.
 
 ## Resources
 
 - [Equations reference](references/EQUATIONS.md)
 - [Code mapping](references/CODE_MAP.md)
-- [Audit 2026-01-19](references/AUDIT_2026-01-19.md)
+- [Remediation plan](../../../docs/plan/2026-04-18_leakage_safe_remediation_plan.md)
+- Historical audits (pre-remediation, do not follow their conclusions):
+  references/AUDIT_2026-01-15.md, references/AUDIT_2026-01-19.md
 
 ## Gotchas
 
-- Small groups can create unstable statistics; apply minimum count / backoff.
-- Consistent naming of context features is required for downstream configs.
-- **⚠️ Model Selection:** Always use tree-based models (XGBoost, Random Forest) with SCE features. Linear models (Ridge, Lasso) cannot capture the non-linear interactions that SCE provides.
-- **⚠️ Order of Operations:** SCE enrichment MUST happen BEFORE train/test split. The sequence is: Load → Sample → SCE → Split → Train.
-- **⚠️ Leakage Risk in Experiments:** Evaluate with `use_cross_fitting=True` (now the default in `scripts/run.py`) or compute stats strictly on training folds and apply to test. Avoid full-dataset target aggregation when reporting metrics.
-- **⚠️ Target-Derived Features Prohibited:** Ratio features (`y / group_mean`) or any feature computed from the target are not allowed for evaluation. Do not enable target-derived features in experiment runs.
-- **⚠️ Column names with underscores:** The stats system uses double underscores (`__`) as delimiters between hierarchy levels. This is essential because column names may contain single underscores (e.g., `room_type`, `property_type`). Using single underscore as delimiter would break when parsing level names back to column lists.
-  - **Example:** Hierarchy `["city", "room_type"]` → level name `"city__room_type"` → columns `["city", "room_type"]`
-  - **Bug fixed (2026-01-16):** Changed from `"_".join()` to `"__".join()` in stats.py and engine.py
+- Small groups create unstable statistics; minimum count + backoff handle this.
+- Level names use double underscores (`__`) as delimiters because column names
+  may contain single underscores (`city__room_type` → `["city", "room_type"]`).
+- Tree-based models exploit SCE features far better than linear models.
+- `sce/search.py` is EXPERIMENTAL (low coverage); treat its outputs as
+  exploratory unless the run is report-grade.
