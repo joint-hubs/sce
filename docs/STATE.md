@@ -36,7 +36,16 @@
 | m5_store_dept_daily | full, all pass | **PROMOTED** | +1.14% |
 | melbourne_housing | full, all pass | **PROMOTED** | +2.19% |
 | rental_poland_long | permuted+shuffled **FAIL** | BLOCKED (correct) | +1.22% real ≈ noise (permuted gives +3.1%) |
-| walmart / rossmann / UAE ×2 | 20k-subsample diagnostics queued | pending | — |
+| walmart_weekly | 20k subsample: all pass (permuted −0.4%) | pending full-data run | +9.0% real (diagnostic grade) |
+| rossmann_daily | 20k subsample: all pass (permuted −1.8%) | pending full-data run | +3.2% real (diagnostic grade) |
+| sales_uae_transactions | 20k subsample: **permuted FAIL (+24.5%!)** | blocked — investigate | +8.7% real, NOT trustworthy |
+| rental_uae_contracts | 20k subsample: SCE **hurts** (−6.7% real), shuffled FAIL | blocked — investigate | — |
+
+UAE caveat: 20k random rows out of 1M/5.5M leave most groups nearly empty, so
+the UAE numbers may be subsample artifacts — rerun diagnostics on larger
+subsamples (or full data, overnight) before drawing conclusions. The
+sales_uae permuted-target failure (+24.5% advantage on pure noise) is a
+serious red flag for that config either way.
 
 Honest takeaway: poland_long's SCE advantage is within noise at n≈1000 — the
 gate caught it. Promotion also now requires every diagnostic to report
