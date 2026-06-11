@@ -1,7 +1,7 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-06-11**
+> Last update: **2026-06-11** (evening session)
 
 ## Where we are
 
@@ -16,7 +16,15 @@
 - **Dataset expansion:** M5, Rossmann, Walmart, Melbourne configs + prepare
   scripts committed. Parquets are **not** in git (Kaggle redistribution rules) —
   rebuild locally with `scripts/prepare_new_datasets.py` / `scripts/prepare_m5_dataset.py`.
-- **Tests:** full suite green locally (114 passed, Python 3.13, `.venv`).
+- **Search selection bias FIXED (2026-06-11):** `FeatureCombinationSearch` now
+  selects candidates on an internal validation split (`val_strategy="tail"` for
+  temporal data); winners are refit on full train and evaluated once on test
+  (`eval_set` column distinguishes them). Pruning trace also moved off test.
+  **All search results produced before this fix are inflated — not citable.**
+- **Report-grade gate wired (2026-06-11):** `run.py` loads the latest
+  diagnostics from `results/diagnostics/<dataset>/` and computes feature
+  dominance in-run; promotion to report-grade works end-to-end.
+- **Tests:** full suite green locally (116+ passed, Python 3.13, `.venv`).
 - **Working tree:** clean as of 2026-06-11; main is ahead of `origin/main`
   (push pending — see next steps).
 
