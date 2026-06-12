@@ -38,8 +38,9 @@ class StatsAggregator:
         # Dispersion measures
         AggregationMethod.STD: lambda x: x.std(ddof=0),  # Population std (see note above)
         AggregationMethod.VAR: lambda x: x.var(ddof=0),  # Population variance
-        AggregationMethod.CV: lambda x: x.std(ddof=0)
-        / (x.mean() + 1e-8),  # Coefficient of variation
+        AggregationMethod.CV: lambda x: (
+            x.std(ddof=0) / (x.mean() + 1e-8)
+        ),  # Coefficient of variation
         AggregationMethod.IQR: lambda x: x.quantile(0.75) - x.quantile(0.25),  # Interquartile range
         # Quantiles/Percentiles (Paper: "quantiles")
         AggregationMethod.Q05: lambda x: x.quantile(0.05),

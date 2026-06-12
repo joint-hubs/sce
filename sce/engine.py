@@ -468,7 +468,9 @@ class StatisticalContextEngine(BaseEstimator, TransformerMixin):
                     self._cleanup_removed_features = self._cleanup_pipeline.removed_features_
                     self._cleanup_report = report
                 if self._cleanup_removed_features:
-                    enriched = enriched.drop(columns=self._cleanup_removed_features, errors="ignore")
+                    enriched = enriched.drop(
+                        columns=self._cleanup_removed_features, errors="ignore"
+                    )
 
             return enriched
 

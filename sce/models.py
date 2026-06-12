@@ -14,7 +14,6 @@ import pandas as pd
 from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor, RandomForestRegressor
 from sklearn.linear_model import Ridge
 
-
 _MODEL_LABELS = {
     "xgboost": "XGBoost",
     "lightgbm": "LightGBM",
@@ -38,7 +37,9 @@ def model_supports_gpu(model_type: str) -> bool:
     return model_type.lower() in _GPU_CAPABLE_MODELS
 
 
-def _filtered_params(estimator: Any, params: dict[str, Any], defaults: dict[str, Any]) -> dict[str, Any]:
+def _filtered_params(
+    estimator: Any, params: dict[str, Any], defaults: dict[str, Any]
+) -> dict[str, Any]:
     valid_params = estimator.get_params(deep=False)
     resolved = {key: value for key, value in defaults.items() if key in valid_params}
     resolved.update({key: value for key, value in params.items() if key in valid_params})

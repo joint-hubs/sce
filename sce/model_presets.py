@@ -177,7 +177,9 @@ def resolve_model_presets(
     Returns:
         Tuple of (model_type, preset_names, preset_params).
     """
-    model_type = _normalize_model_type(model_cfg.get("type") if isinstance(model_cfg, dict) else None)
+    model_type = _normalize_model_type(
+        model_cfg.get("type") if isinstance(model_cfg, dict) else None
+    )
     presets = load_model_presets(model_type, config_path)
 
     preset_names = None
@@ -221,5 +223,6 @@ def resolve_xgboost_presets(
         config_path,
     )
     return names, presets
+
 
 SUPPORTED_MODEL_TYPES: Tuple[str, ...] = tuple(sorted(_DEFAULT_PRESETS))

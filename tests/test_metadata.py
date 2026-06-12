@@ -6,14 +6,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from sce import ContextConfig
+from sce.config import AggregationMethod
 from scripts.run import (
+    DatasetSplit,
     _collect_run_metadata,
     _config_hash,
     _enforce_run_grade_policy,
-    DatasetSplit,
 )
-from sce import ContextConfig
-from sce.config import AggregationMethod
 
 
 def test_config_hash_deterministic(tmp_path: Path):

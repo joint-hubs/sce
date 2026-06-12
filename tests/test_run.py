@@ -265,8 +265,12 @@ def test_pruning_droplist_train_only():
             }
         },
     }
-    train_df = pd.DataFrame({"x": [1.0, None, None, 4.0], "z": [10, 11, 12, 13], "price": [1, 2, 3, 4]})
-    test_df = pd.DataFrame({"x": [10.0, 11.0, 12.0, 13.0], "z": [20, 21, 22, 23], "price": [5, 6, 7, 8]})
+    train_df = pd.DataFrame(
+        {"x": [1.0, None, None, 4.0], "z": [10, 11, 12, 13], "price": [1, 2, 3, 4]}
+    )
+    test_df = pd.DataFrame(
+        {"x": [10.0, 11.0, 12.0, 13.0], "z": [20, 21, 22, 23], "price": [5, 6, 7, 8]}
+    )
 
     train_prepared = prepare_features(train_df, config, "price")
     test_prepared = prepare_features(
@@ -295,8 +299,12 @@ def test_pruning_zero_variance_train_only():
             }
         },
     }
-    train_df = pd.DataFrame({"x": [1.0, 1.0, 1.0, 1.0], "z": [2.0, 3.0, 4.0, 5.0], "price": [1, 2, 3, 4]})
-    test_df = pd.DataFrame({"x": [10.0, 11.0, 12.0, 13.0], "z": [6.0, 7.0, 8.0, 9.0], "price": [5, 6, 7, 8]})
+    train_df = pd.DataFrame(
+        {"x": [1.0, 1.0, 1.0, 1.0], "z": [2.0, 3.0, 4.0, 5.0], "price": [1, 2, 3, 4]}
+    )
+    test_df = pd.DataFrame(
+        {"x": [10.0, 11.0, 12.0, 13.0], "z": [6.0, 7.0, 8.0, 9.0], "price": [5, 6, 7, 8]}
+    )
 
     train_prepared = prepare_features(train_df, config, "price")
     test_prepared = prepare_features(

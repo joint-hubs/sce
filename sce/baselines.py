@@ -11,7 +11,6 @@ from typing import Iterable
 
 from sce.config import AggregationMethod
 
-
 _CONTEXT_VARIANT_METHODS: dict[str, tuple[AggregationMethod, ...] | None] = {
     "sce": None,
     "target_mean": (AggregationMethod.MEAN,),

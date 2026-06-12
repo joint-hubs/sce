@@ -20,7 +20,9 @@ def test_target_mean_variant_resolves_to_mean_only():
 
 
 def test_mean_std_count_variant_resolves_expected_statistics():
-    methods = resolve_context_variant_methods("hierarchical_mean_std_count", [AggregationMethod.MEAN])
+    methods = resolve_context_variant_methods(
+        "hierarchical_mean_std_count", [AggregationMethod.MEAN]
+    )
 
     assert methods == [AggregationMethod.MEAN, AggregationMethod.STD, AggregationMethod.COUNT]
 

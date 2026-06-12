@@ -6,12 +6,12 @@
 @data_flow: public API imports
 """
 
-from sce.cleanup import FeatureCleanupPipeline
 from sce.baselines import (
     SUPPORTED_CONTEXT_VARIANTS,
     get_context_variant_label,
     resolve_context_variant_methods,
 )
+from sce.cleanup import FeatureCleanupPipeline
 from sce.config import AggregationMethod, CleanupConfig, ContextConfig, detect_categorical_columns
 from sce.engine import StatisticalContextEngine
 from sce.importance import aggregate_importance, run_iterative_pruning

@@ -14,7 +14,6 @@ import pytest
 
 from sce.search import train_model
 
-
 HAS_LIGHTGBM = importlib.util.find_spec("lightgbm") is not None
 HAS_CATBOOST = importlib.util.find_spec("catboost") is not None
 

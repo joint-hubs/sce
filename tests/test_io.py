@@ -14,7 +14,6 @@ import pytest
 
 from sce.io import get_dataset_info, list_datasets, load_dataset, save_dataset, verify_dataset
 
-
 PROJECT_ROOT = Path(__file__).parent.parent
 LOCAL_DATA_PATH = PROJECT_ROOT / "data" / "parquet" / "rental_poland_short.parquet"
 

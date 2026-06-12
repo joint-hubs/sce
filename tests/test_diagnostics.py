@@ -54,7 +54,9 @@ def test_shuffled_groups_per_column_breakdown(tmp_path, monkeypatch):
     monkeypatch.setattr(shuffled_groups, "evaluate_config_dataframe", _mock_eval)
     monkeypatch.setattr(shuffled_groups, "RESULTS_DIR", tmp_path)
 
-    result = shuffled_groups.run_shuffled_groups("demo", n_permutations=2, seed=1, mode="per-column")
+    result = shuffled_groups.run_shuffled_groups(
+        "demo", n_permutations=2, seed=1, mode="per-column"
+    )
     assert result["mode"] == "per-column"
     assert "city" in result["columns_evaluated"]
     assert "city" in result["per_column"]

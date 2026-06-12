@@ -58,7 +58,9 @@ def _make_search_data(n_train: int = 40, n_test: int = 7):
             "ctx_b": rng.normal(size=n_train),
         }
     )
-    y_train = pd.Series(2 * X_train["base_a"] + X_train["ctx_a"] + rng.normal(scale=0.1, size=n_train))
+    y_train = pd.Series(
+        2 * X_train["base_a"] + X_train["ctx_a"] + rng.normal(scale=0.1, size=n_train)
+    )
     X_test = pd.DataFrame(
         {
             "base_a": rng.normal(size=n_test),

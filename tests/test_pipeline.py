@@ -25,7 +25,9 @@ def test_pipeline_with_model_accepts_fit_x_y(sample_data):
         use_cross_fitting=True,
         n_folds=3,
     )
-    pipeline = create_sce_pipeline(config, model=RandomForestRegressor(n_estimators=10, random_state=42))
+    pipeline = create_sce_pipeline(
+        config, model=RandomForestRegressor(n_estimators=10, random_state=42)
+    )
 
     X = encoded.drop(columns=["price"])
     y = encoded["price"]

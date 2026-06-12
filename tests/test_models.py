@@ -13,7 +13,6 @@ import pytest
 
 from sce.models import build_model, model_supports_gpu
 
-
 HAS_LIGHTGBM = importlib.util.find_spec("lightgbm") is not None
 HAS_CATBOOST = importlib.util.find_spec("catboost") is not None
 
