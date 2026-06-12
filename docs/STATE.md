@@ -91,10 +91,24 @@ Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
 - **DELETED (stale, old protocol, not citable):** `summary_fig1–6` — they were
   built from January `categorical_mode_batch_summary_*` and March search runs.
 - **PENDING fresh inputs:** cross-model figures (fig1–6) need
-  `--compare-categorical-modes`, appendix figures need `--search` artifacts.
-  **Night-run script READY (not launched):** `%TEMP%\sce_night_run_paper.cmd`
-  → log `results/night_run_paper.log` (compare + search × 5 datasets;
-  walmart/rossmann search may take hours).
+  `--compare-categorical-modes` runs, appendix figures need `--search` artifacts.
+- **Pre-remediation result dirs archived** to `results/archive_pre_remediation/`
+  (47 dirs from March/April: categorical compares, batch summaries, old search)
+  so `--latest` aggregation only sees post-remediation runs.
+
+## Overnight master script (READY, awaiting launch approval)
+
+`%TEMP%\sce_night_run_full.cmd` → log `results/night_run_full.log`. Sequence:
+1. Cross-model compare: 7 models × 5 datasets (fast GBDTs first, slow sklearn last)
+2. Search × 5 datasets (validation-selected protocol)
+3. UAE full-data diagnostics (sales 1M, rental 5.5M — RAM-heavy, isolated)
+4. `generate_categorical_mode_batch_summary --latest` (fresh runs only)
+5. All three figure scripts
+6. `scripts/night_report.py` → `results/night_report_<ts>.md` (full markdown
+   report: experiments, search, compares, diagnostics, figure freshness)
+
+Requires a clean git tree at launch (report-grade gate). The older partial
+scripts (`sce_night_run_uae.cmd`, `sce_night_run_paper.cmd`) are superseded.
 
 ## How to run
 
