@@ -5,7 +5,7 @@
 
 ## Where we are
 
-- **Version:** 0.4.0 prepared locally (PyPI still at 0.3.5); `pip install stat-context`, `import sce`.
+- **Version:** **0.4.0 RELEASED to PyPI** (2026-06-12, tag `v0.4.0`); `pip install stat-context`, `import sce`. CI green on 3.9–3.12; clean-venv install smoke-tested.
 - **License:** code relicensed to **Apache-2.0** (2026-06-12); paper stays CC-BY-NC.
 - **Active benchmark set (5):** rental_poland_short, melbourne_housing,
   m5_store_dept_daily, walmart_weekly, rossmann_daily — all report-grade
@@ -65,14 +65,15 @@ gate caught it correctly. 5 out of 8 datasets now promoted to report-grade.
 
 Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
 
-1. **Push main to origin** and confirm CI is green (first CI run with the new
-   test files; CI matrix is Python 3.9–3.12, locally tested on 3.13 only).
+1. ~~Push + CI~~ DONE (2026-06-12): main pushed, CI green on 3.9–3.12
+   (fixed: ruff format across repo, lazy requests/tqdm import in data/download.py).
 2. ~~R0-1~~ DONE: all 5 active datasets have report-grade promoted runs.
 3. ~~R0-2~~ DONE (2026-06-12): code relicensed to Apache-2.0.
 4. ~~R0-3~~ DONE (2026-06-12): lightgbm+catboost → `[models]` extra;
    sklearn floor raised to 1.4 (README quickstart uses root_mean_squared_error).
    xgboost stays core for now (full extraction is a 1.0 task).
-5. **Release 0.4.0 to PyPI** once CI is green (version + changelog ready).
+5. ~~Release 0.4.0~~ DONE (2026-06-12): tag `v0.4.0` → TestPyPI → PyPI →
+   GitHub Release, all jobs green; fresh-venv install verified.
 6. **R0-4:** remove deprecated API (`hierarchy`, `include_quantiles`, …).
 7. **R0-5/6/7:** public API freeze, remove `print()` from library, repo cleanup.
 8. Then R1 (quality gates) → R2 (docs) → R3 (TestPyPI rc1 → 1.0.0).
