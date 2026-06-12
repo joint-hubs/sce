@@ -24,10 +24,6 @@ import zipfile
 from pathlib import Path
 from typing import NamedTuple
 
-import requests
-from tqdm import tqdm
-
-
 DATA_DIR = Path(__file__).parent
 MANIFEST_PATH = DATA_DIR / "manifests" / "checksums.txt"
 PARQUET_DIR = DATA_DIR / "parquet"
@@ -121,6 +117,14 @@ def parse_source(source: str) -> SourceSpec:
 
 def download_file(url: str, dest: Path, expected_size: int, retries: int = 3) -> None:
     """Download file with progress bar and retry logic."""
+    try:
+        import requests
+        from tqdm import tqdm
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "Dataset downloads require the 'data' extra: pip install stat-context[data]"
+        ) from exc
+
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     for attempt in range(1, retries + 1):
