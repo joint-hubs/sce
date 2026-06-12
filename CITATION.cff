@@ -1,4 +1,4 @@
-cff-version: 1.2.0
+﻿cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: "Statistical Context Engineering"
 abstract: "A nonparametric, model-agnostic representation method that augments each observation with hierarchical statistical context."
@@ -6,7 +6,7 @@ authors:
   - family-names: "Stachowicz"
     given-names: "Mateusz"
   - family-names: "Halkiewicz"
-    given-names: "Stanisław"
+    given-names: "StanisĹ‚aw"
 version: 0.3.3
 date-released: 2026-01-22
 repository-code: "https://github.com/joint-hubs/sce"
@@ -17,4 +17,4 @@ keywords:
   - hierarchical-features
   - regression
   - bayesian-estimation
-license: "CC-BY-NC-4.0"
+license: "Apache-2.0"

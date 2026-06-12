@@ -3,7 +3,7 @@
 **Hierarchical feature enrichment for regression with leakage-safe cross-fitting**
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Tests](https://github.com/joint-hubs/sce/actions/workflows/ci.yml/badge.svg)](https://github.com/joint-hubs/sce/actions/workflows/ci.yml)
 [![PyPI version](https://badge.fury.io/py/stat-context.svg)](https://pypi.org/project/stat-context/)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://joint-hubs.github.io/sce)
@@ -240,10 +240,9 @@ sce/
 
 ## License
 
-This software is released under the [Creative Commons Attribution-NonCommercial 4.0 International License](https://creativecommons.org/licenses/by-nc/4.0/).
+This software is released under the [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0) — free for academic, research, and commercial use.
 
-- **Academic and research use**: Permitted with attribution
-- **Commercial use**: Requires a separate license agreement
+The accompanying research paper remains under CC BY-NC 4.0.
 
 ---
 

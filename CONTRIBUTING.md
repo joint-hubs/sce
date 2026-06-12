@@ -208,4 +208,4 @@ Include:
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under the same license as the project (CC BY-NC 4.0 for non-commercial use).
+By contributing, you agree that your contributions will be licensed under the same license as the project (Apache License 2.0).
