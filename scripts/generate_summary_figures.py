@@ -60,11 +60,11 @@ PALETTE = {
 }
 
 DATASET_LABELS = {
-    "rental_poland_long": "Otodom Poland",
     "rental_poland_short": "Airbnb Poland",
-    "rental_uae_contracts": "Dubai Rentals",
-    "sales_uae_transactions": "Dubai Transactions",
+    "melbourne_housing": "Melbourne Housing",
     "m5_store_dept_daily": "M5 Demand",
+    "walmart_weekly": "Walmart Weekly",
+    "rossmann_daily": "Rossmann Daily",
 }
 
 MODEL_ORDER = [
