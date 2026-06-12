@@ -5,7 +5,12 @@
 
 ## Where we are
 
-- **Version:** 0.3.5 on PyPI (`stat-context`), `import sce`.
+- **Version:** 0.4.0 prepared locally (PyPI still at 0.3.5); `pip install stat-context`, `import sce`.
+- **License:** code relicensed to **Apache-2.0** (2026-06-12); paper stays CC-BY-NC.
+- **Active benchmark set (5):** rental_poland_short, melbourne_housing,
+  m5_store_dept_daily, walmart_weekly, rossmann_daily — all report-grade
+  PROMOTED. Blocked configs moved to `configs/experimental/` (poland_long,
+  sales_uae, rental_uae) pending full-data reruns.
 - **Paper context:** ICML rebuttal plans from 2026-03-29 in `docs/plan/`.
 - **Leakage-safe remediation plan** (`docs/plan/2026-04-18_leakage_safe_remediation_plan.md`):
   **DONE** — all P0/P1/P2 tasks implemented and committed (2026-06-11).
@@ -62,16 +67,17 @@ Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
 
 1. **Push main to origin** and confirm CI is green (first CI run with the new
    test files; CI matrix is Python 3.9–3.12, locally tested on 3.13 only).
-2. **R0-1 remainder:** rerun all datasets with fresh metadata; at least one run
-   with `run_grade=report-grade`.
-3. **R0-2 ⚠ DECYZJA:** license — CC-BY-NC-4.0 blocks a 1.0 library release.
-   Suggested: Apache-2.0 for code, paper stays CC-BY-NC. Mateusz must decide.
-4. **R0-3:** heavy deps (xgboost/lightgbm/catboost) → optional extras.
-   Note: lightgbm+catboost were just ADDED to core deps for the experiment work —
-   this must be reversed for 1.0.
-5. **R0-4:** remove deprecated API (`hierarchy`, `include_quantiles`, …).
-6. **R0-5/6/7:** public API freeze, remove `print()` from library, repo cleanup.
-7. Then R1 (quality gates) → R2 (docs) → R3 (TestPyPI rc1 → 1.0.0).
+2. ~~R0-1~~ DONE: all 5 active datasets have report-grade promoted runs.
+3. ~~R0-2~~ DONE (2026-06-12): code relicensed to Apache-2.0.
+4. ~~R0-3~~ DONE (2026-06-12): lightgbm+catboost → `[models]` extra;
+   sklearn floor raised to 1.4 (README quickstart uses root_mean_squared_error).
+   xgboost stays core for now (full extraction is a 1.0 task).
+5. **Release 0.4.0 to PyPI** once CI is green (version + changelog ready).
+6. **R0-4:** remove deprecated API (`hierarchy`, `include_quantiles`, …).
+7. **R0-5/6/7:** public API freeze, remove `print()` from library, repo cleanup.
+8. Then R1 (quality gates) → R2 (docs) → R3 (TestPyPI rc1 → 1.0.0).
+9. **UAE datasets:** full-data diagnostics reruns, then re-promote configs from
+   `configs/experimental/` if they pass.
 
 ## How to run
 
