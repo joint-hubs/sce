@@ -79,8 +79,8 @@ This will:
 The experiment runner and search workflow support these downstream regressors:
 
 - `xgboost`
-- `lightgbm`
-- `catboost`
+- `lightgbm` (requires `pip install stat-context[models]`)
+- `catboost` (requires `pip install stat-context[models]`)
 - `ridge`
 - `random_forest`
 - `extra_trees`
