@@ -84,10 +84,15 @@ drop_zero_variance = true
 | Config File | Dataset | Target |
 |-------------|---------|--------|
 | `rental_poland_short.toml` | Short-term rentals (Airbnb-style) | `price_PLN_per_night` |
-| `rental_poland_long.toml` | Long-term rentals | `price_per_sqm` |
-| `rental_uae_contracts.toml` | Dubai rental contracts | `annual_amount` |
-| `sales_uae_transactions.toml` | Dubai property sales | `amount` |
+| `melbourne_housing.toml` | Melbourne housing prices | `Price` |
 | `m5_store_dept_daily.toml` | Hierarchical daily demand (generated from M5 raw files) | `demand` |
+| `walmart_weekly.toml` | Walmart weekly store-department sales | `Weekly_Sales` |
+| `rossmann_daily.toml` | Rossmann daily store sales | `Sales` |
+
+Configs under `experimental/` are excluded from `list_datasets()` and
+`run.py --all` — they did not pass the leakage diagnostics gate
+(permuted-target / shuffled-groups) and need investigation or retuning
+before their results can be reported. See `experimental/README.md`.
 
 ## Migration from v0.2.x
 

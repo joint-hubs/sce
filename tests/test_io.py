@@ -22,11 +22,18 @@ LOCAL_DATA_PATH = PROJECT_ROOT / "data" / "parquet" / "rental_poland_short.parqu
 def test_list_datasets_includes_known_configs():
     names = {info.name for info in list_datasets()}
     assert "rental_poland_short" in names
-    assert "sales_uae_transactions" in names
+    assert "melbourne_housing" in names
+
+
+def test_list_datasets_excludes_experimental_configs():
+    names = {info.name for info in list_datasets()}
+    assert "sales_uae_transactions" not in names
+    assert "rental_uae_contracts" not in names
+    assert "rental_poland_long" not in names
 
 
 def test_get_dataset_info_uses_manifest_metadata():
-    info = get_dataset_info("rental_uae_contracts")
+    info = get_dataset_info(Path("configs/experimental/rental_uae_contracts.toml"))
 
     assert info.name == "rental_uae_contracts"
     assert info.remote_source is not None
