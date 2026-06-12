@@ -78,7 +78,23 @@ Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
 7. **R0-5/6/7:** public API freeze, remove `print()` from library, repo cleanup.
 8. Then R1 (quality gates) → R2 (docs) → R3 (TestPyPI rc1 → 1.0.0).
 9. **UAE datasets:** full-data diagnostics reruns, then re-promote configs from
-   `configs/experimental/` if they pass.
+   `configs/experimental/` if they pass. **Night-run script READY (not launched):**
+   `%TEMP%\sce_night_run_uae.cmd` → log `results/night_run_uae.log`.
+   RAM caveat: rental_uae is 4.1 GB in memory; watch the first minutes.
+
+## Paper figures status (2026-06-12)
+
+- **REGENERATED from report-grade runs:** `results_consolidated` (B1),
+  `feature_contributions` (B4), `summary_table.tex/.txt` — committed under
+  `docs/figures/paper/`. Source: `run.py --all --run-grade report-grade`
+  (5 datasets, avg RMSE improvement +6.11%).
+- **DELETED (stale, old protocol, not citable):** `summary_fig1–6` — they were
+  built from January `categorical_mode_batch_summary_*` and March search runs.
+- **PENDING fresh inputs:** cross-model figures (fig1–6) need
+  `--compare-categorical-modes`, appendix figures need `--search` artifacts.
+  **Night-run script READY (not launched):** `%TEMP%\sce_night_run_paper.cmd`
+  → log `results/night_run_paper.log` (compare + search × 5 datasets;
+  walmart/rossmann search may take hours).
 
 ## How to run
 
