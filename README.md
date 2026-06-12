@@ -146,13 +146,15 @@ clean git tree, full dataset (no subsampling), and all leakage diagnostics
 green — including **permuted-target** (SCE must show ~zero improvement when
 targets are shuffled; a leaking pipeline improves even on noise).
 
+![SCE benchmark results: RMSE reduction and R² improvement across five datasets](https://raw.githubusercontent.com/joint-hubs/sce/main/docs/figures/paper/results_consolidated.png)
+
 | Dataset | Rows | Split | Baseline → SCE RMSE | Improvement |
 |---------|-----:|-------|---------------------|------------:|
-| `rental_poland_short` (Airbnb) | 1,185 | random | — | **+10.97%** |
+| `rental_poland_short` (Airbnb) | 1,185 | random | 26,509 → 23,602 | **+10.97%** |
 | `rossmann_daily` (store sales) | 844,338 | temporal | 950 → 855 | **+9.90%** |
 | `walmart_weekly` (dept sales) | 420,212 | temporal | 6,769 → 6,339 | **+6.35%** |
-| `melbourne_housing` (prices) | 27,247 | random | — | **+2.19%** |
-| `m5_store_dept_daily` (demand) | 23,529 | temporal | — | **+1.14%** |
+| `melbourne_housing` (prices) | 27,247 | random | 299,575 → 293,023 | **+2.19%** |
+| `m5_store_dept_daily` (demand) | 23,529 | temporal | 87.1 → 86.2 | **+1.14%** |
 
 Model: XGBoost with identical hyperparameters for baseline and SCE; the only
 difference is the added context features. Honest caveat: gains depend on how
