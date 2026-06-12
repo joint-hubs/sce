@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stat-context"
-version = "0.3.5"
-description = "Statistical Context Engineering: Hierarchical feature enrichment for regression models"
+version = "0.4.0"
+description = "Leakage-safe hierarchical target statistics for tabular regression (cross-fitted target encoding with built-in leakage diagnostics)"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
@@ -37,10 +37,8 @@ classifiers = [
 dependencies = [
     "numpy>=1.21.0",
     "pandas>=1.3.0,<3.0.0",
-    "scikit-learn>=1.0.0,<2.0.0",
+    "scikit-learn>=1.4.0,<2.0.0",
     "xgboost>=1.5.0,<3.0.0",
-    "lightgbm>=4.0.0",
-    "catboost>=1.2.0",
     "joblib>=1.1.0",
     "toml>=0.10.2",
     "tomli>=2.0.0;python_version<'3.11'",  # Backport for Python < 3.11
@@ -48,6 +46,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+models = [
+    "lightgbm>=4.0.0",
+    "catboost>=1.2.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -72,7 +74,7 @@ docs = [
     "mkdocstrings[python]>=0.24.0",
 ]
 all = [
-    "stat-context[dev,data,viz,docs]",
+    "stat-context[models,dev,data,viz,docs]",
 ]
 
 [project.urls]

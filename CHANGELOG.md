@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-12
+
+### Changed
+
+- **License**: code relicensed from CC-BY-NC-4.0 to Apache-2.0 (the research
+  paper remains CC BY-NC 4.0)
+- **Evaluation protocol overhaul** — all previously published benchmark
+  numbers were produced under a flawed protocol and are superseded:
+  - Train/test split now happens before any enrichment; encoders, pruning and
+    cleanup are fit on train only
+  - `FeatureCombinationSearch` selects candidates on an internal validation
+    split (tail split for temporal data); the test set is touched exactly once
+  - Temporal datasets use rolling (monotonic) cross-fit folds; random
+    cross-fitting with a temporal split is rejected
+- `lightgbm` and `catboost` moved from core dependencies to the new `models`
+  extra (`pip install stat-context[models]`); xgboost remains core
+- `scikit-learn` floor raised to 1.4
+- README rewritten around a copy-paste runnable quickstart and the new
+  report-grade benchmark table
+
+### Added
+
+- Leakage diagnostics suite (`scripts/diagnostics/`): permuted-target,
+  shuffled-groups, cross-fit A/B, feature dominance
+- Run metadata (git SHA, config hash, seed, run grade) saved with every
+  experiment; report-grade promotion gate requires a clean git tree and all
+  diagnostics passing
+- Rolling cross-fit `test_size` clamp so configs tuned for full datasets do
+  not crash on smaller samples
+
+### Removed
+
+- `rental_poland_long`, `sales_uae_transactions` and `rental_uae_contracts`
+  moved to `configs/experimental/` — they currently fail the leakage
+  diagnostics gate and are excluded from the benchmark set
+
 ## [0.3.5] - 2026-01-23
 
 ### Fixed
