@@ -96,9 +96,27 @@ Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
   (47 dirs from March/April: categorical compares, batch summaries, old search)
   so `--latest` aggregation only sees post-remediation runs.
 
-## Overnight master script (READY, awaiting launch approval)
+## Full batch RUNNING on GCP (launched 2026-06-12 ~17:45)
 
-`%TEMP%\sce_night_run_full.cmd` → log `results/night_run_full.log`. Sequence:
+- **VM:** `sce-night-run`, c2d-standard-16 **spot** (16 vCPU, 64 GB),
+  europe-central2-b, project `dochubs`, max-run-duration 12 h (auto-STOP).
+  Cost ≈ $0.20/h spot → ~$1.5–2.5 for the whole batch.
+- **Startup script:** `scripts/gcp_night_startup.sh` (committed) — clones main,
+  installs `.[models,viz]`, pulls parquets + diagnostics from
+  `gs://sce-night-dochubs`, runs the full sequence below, uploads
+  `done/night_results.tar.gz` + `DONE` marker, powers off.
+- **Partial sync:** results rsync to `gs://sce-night-dochubs/partial/` every
+  5 min, so a spot preemption loses at most one step. If preempted (VM state
+  TERMINATED before DONE marker): `gcloud compute instances start sce-night-run
+  --zone=europe-central2-b` — the startup script is idempotent (fresh clone).
+- **Local watcher:** detached PowerShell (`%TEMP%\sce_gcp_watcher.ps1`) polls
+  the bucket every 5 min for up to 16 h; on DONE it downloads and unpacks into
+  `results_gcp_<ts>/` in the repo. Log: `results/gcp_watcher.log`.
+- **Check status:** `gcloud compute instances list` (RUNNING/TERMINATED) and
+  `gcloud storage ls gs://sce-night-dochubs/done/`.
+
+Local fallback script also exists: `%TEMP%\sce_night_run_full.cmd`. Sequence
+(same on both):
 1. Cross-model compare: 7 models × 5 datasets (fast GBDTs first, slow sklearn last)
 2. Search × 5 datasets (validation-selected protocol)
 3. UAE full-data diagnostics (sales 1M, rental 5.5M — RAM-heavy, isolated)
