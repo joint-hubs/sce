@@ -49,7 +49,9 @@ def test_train_model_supports_ridge():
     )
 
     assert set(metrics) == {"rmse", "r2", "mae"}
-    assert list(importance["feature"]) == ["feature_a", "feature_b"]
+    # Ridge is wrapped in an imputing + standard-scaling pipeline, so importance
+    # reflects standardized coefficients; assert the feature set, not the order.
+    assert set(importance["feature"]) == {"feature_a", "feature_b"}
     assert importance["importance"].ge(0).all()
 
 

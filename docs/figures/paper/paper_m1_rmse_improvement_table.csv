@@ -1,5 +1,6 @@
 Dataset,Baseline RMSE,Best SCE RMSE,Improvement %
-Rental Poland Long,"4,580.89","4,541.05",0.87
-Rental Poland Short,"27,367.70","22,541.28",17.64
-Rental Uae Contracts,"465,037.04","360,266.87",22.53
-Sales Uae Transactions,"32,489,660.42","26,353,228.23",18.89
+M5 Store Dept Daily,85.64,85.77,-0.15
+Melbourne Housing,"300,347.65","293,376.35",2.32
+Rental Poland Short,"21,859.64","16,033.43",26.65
+Rossmann Daily,872.19,775.78,11.05
+Walmart Weekly,"6,740.70","5,957.72",11.62

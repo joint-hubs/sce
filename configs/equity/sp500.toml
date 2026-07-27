@@ -1,0 +1,32 @@
+# Configuration for the S&P 500 equity universe (delisting-aware registry).
+# Equity configs live under configs/equity/ and are NOT auto-discovered by
+# sce.io's list_datasets() -- equity has its own registry (equity.data.registry).
+
+[universe]
+name = "sp500"
+description = "S&P 500 constituents with delisting-aware registry (seed reference for S1.1; full historical-constituents dataset wired in S1.1)"
+source = "in-repo"
+universe_file = "configs/equity/sp500_universe.csv"
+
+# S1.2: OHLCV ingestion output config. ``EquityDataLoader.fetch_prices()``
+# writes a Hive-style partitioned parquet store here, partitioned by the
+# ``partition_cols`` (derived from the tz-aware period_close_ts). See
+# ``equity/data/README.md`` for the full schema and partition layout.
+[prices]
+output_dir = "data/equity/prices"
+partition_cols = ["year", "month"]
+source = "yfinance"
+
+# S1.3: point-in-time text layer. ``EquityDataLoader.fetch_articles()`` reads
+# the seed CSV below (NO network -- live RSS/Kaggle ingestion is S7), validates
+# it via pandera, and writes a Hive-style partitioned parquet store under
+# ``output_dir``. ``partition_cols`` are derived from ``published_at`` (UTC).
+# ``EquityDataLoader.join_articles_to_prices()`` reads both stores, builds the
+# XNYS session-close boundary index, and writes ``articles_joined.parquet``
+# under the parent of ``output_dir``. See ``equity/data/README.md`` for the
+# join semantics and the ``published_at_guard`` diagnostic.
+[articles]
+output_dir = "data/equity/articles"
+partition_cols = ["year", "month"]
+source = "seed"
+seed_file = "configs/equity/articles_seed.csv"

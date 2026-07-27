@@ -1,5 +1,6 @@
 Dataset,Baseline RMSE,+SCE RMSE,ΔRMSE,ΔR²
-Airbnb Poland,"27,368","22,541",↓ 17.6%,+24.49 pp
-Dubai Rentals,"465,037","360,267",↓ 22.5%,+3.83 pp
-Dubai Transactions,"32,489,660","26,353,228",↓ 18.9%,+25.83 pp
-Otodom Poland,"4,581","4,541",↓ 0.9%,+1.55 pp
+Airbnb Poland,"21,860","16,033",↓ 26.7%,+39.35 pp
+M5 Store Dept Daily,86,86,↑ 0.2%,-0.01 pp
+Melbourne Housing,"300,348","293,376",↓ 2.3%,+0.97 pp
+Rossmann Daily,872,776,↓ 11.1%,+1.72 pp
+Walmart Weekly,"6,741","5,958",↓ 11.6%,+2.02 pp
