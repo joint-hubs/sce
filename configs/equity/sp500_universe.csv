@@ -1,0 +1,36 @@
+# Seed reference for S1.1. listed_at approximate for historical delisted names; delisted_at = verified delisting/event date. Full historical-constituents dataset wired in S1.2. Source: public record (bankruptcy filings, acquisition close dates).
+# listed_at is left empty for delisted rows (the loader treats missing listed_at as -infinity / always listed in the past). delisted_at is left empty for current members (the loader treats missing delisted_at as +infinity / still listed). Tickers may contain dots (e.g. BRK.B).
+ticker,listed_at,delisted_at,name
+ENE,,2002-01-15,Enron Corp (bankruptcy; NYSE halt 2002-01-11)
+LEH,,2008-09-22,Lehman Brothers Holdings (bankruptcy; NYSE delist 2008-09-22)
+WCOM,,2002-07-21,WorldCom (bankruptcy; NASDAQ delist 2002-07-21)
+BSC,,2008-05-30,Bear Stearns (JPM acquisition close 2008-05-30)
+WB,,2008-12-31,Wachovia (Wells Fargo acquisition close 2008-12-31)
+MER,,2008-12-31,Merrill Lynch (BofA acquisition close 2008-12-31)
+WM,,2008-09-25,Washington Mutual (FDIC seizure 2008-09-25)
+CFC,,2008-07-01,Countrywide Financial (BofA acquisition close 2008-07-01)
+SHLD,,2018-10-23,Sears Holdings (bankruptcy; NASDAQ delist 2018-10-23)
+GM,,2009-06-02,General Motors (old; bankruptcy; NYSE delist 2009-06-02)
+RSH,,2015-02-06,RadioShack (bankruptcy; NYSE delist 2015-02-06)
+JCP,,2020-06-09,J.C. Penney (bankruptcy; NYSE delist 2020-06-09)
+MON,,2018-06-07,Monsanto (Bayer acquisition close 2018-06-07)
+AAPL,,Apple Inc.
+MSFT,,Microsoft Corp
+AMZN,,Amazon.com Inc
+NVDA,,NVIDIA Corp
+GOOGL,,Alphabet Inc Class A
+META,,Meta Platforms Inc
+BRK.B,,Berkshire Hathaway Class B
+JPM,,JPMorgan Chase
+V,,Visa Inc
+JNJ,,Johnson & Johnson
+WMT,,Walmart Inc
+XOM,,Exxon Mobil
+UNH,,UnitedHealth Group
+MA,,Mastercard Inc
+PG,,Procter & Gamble
+HD,,Home Depot
+CVX,,Chevron Corp
+KO,,Coca-Cola Co
+PEP,,PepsiCo Inc
+COST,,Costco Wholesale

@@ -73,8 +73,13 @@ docs = [
     "mkdocs-material>=9.0.0",
     "mkdocstrings[python]>=0.24.0",
 ]
+equity = [
+    "yfinance>=0.2.40",
+    "pandas_market_calendars>=4.3.0",
+    "pandera>=0.20.0",
+]
 all = [
-    "stat-context[models,dev,data,viz,docs]",
+    "stat-context[models,dev,data,viz,docs,equity]",
 ]
 
 [project.urls]
@@ -89,10 +94,11 @@ sce = "sce.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sce*"]
+include = ["sce*", "equity*"]
 
 [tool.setuptools.package-data]
 sce = ["py.typed"]
+equity = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
