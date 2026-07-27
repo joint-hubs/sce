@@ -12,7 +12,29 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import ExtraTreesRegressor, GradientBoostingRegressor, RandomForestRegressor
-from sklearn.linear_model import Ridge
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import RidgeCV
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+
+
+def _inf_to_nan(X: Any) -> Any:
+    """Replace +/-inf with NaN so the downstream imputer can fill them.
+
+    SCE ratio/z-score features can be infinite (e.g. y/median when median=0, or
+    a z-score when the group std is 0). Tree models tolerate inf, but linear
+    models and StandardScaler turn it into garbage. Routing inf through NaN lets
+    the median imputer neutralize it.
+    """
+    arr = np.asarray(X, dtype=float)
+    return np.where(np.isinf(arr), np.nan, arr)
+
+
+# Wide log-spaced grid for RidgeCV. SCE feature blocks are high-dimensional and
+# strongly collinear (many quantiles of the same group), so on small datasets
+# (n < p) a fixed alpha=1 underregularizes and predictions explode. Cross-
+# validating alpha per fit keeps the linear baseline stable.
+_RIDGE_ALPHA_GRID = np.logspace(-1.0, 4.0, 20)
 
 _MODEL_LABELS = {
     "xgboost": "XGBoost",
@@ -51,6 +73,37 @@ def _extract_runtime_hints(params: dict[str, Any]) -> tuple[dict[str, Any], bool
     use_gpu = bool(resolved.pop("use_gpu", False))
     gpu_device_id = resolved.pop("gpu_device_id", None)
     return resolved, use_gpu, gpu_device_id
+
+
+def _wrap_sklearn(estimator: Any, *, scale: bool = False) -> Pipeline:
+    """Wrap a NaN-intolerant sklearn estimator in an imputing pipeline.
+
+    Ridge, RandomForest, ExtraTrees and GradientBoosting (the pure-sklearn
+    estimators) reject NaN inputs, unlike the gradient-boosting libraries which
+    handle missing values natively. SCE feature blocks frequently contain NaNs
+    for small/empty groups, so we median-impute before fitting. ``scale=True``
+    additionally standardizes features for scale-sensitive linear models
+    (without it Ridge can blow up by hundreds of percent on raw-scale targets).
+
+    ``keep_empty_features=True`` keeps all-NaN columns (filled with the impute
+    statistic) so the feature count stays aligned with the input — required for
+    feature-importance extraction. Needs scikit-learn >= 1.2.
+    """
+    steps = [
+        ("sanitize", FunctionTransformer(_inf_to_nan, feature_names_out="one-to-one")),
+        ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
+    ]
+    if scale:
+        steps.append(("scale", StandardScaler()))
+    steps.append(("model", estimator))
+    return Pipeline(steps)
+
+
+def _final_estimator(model: Any) -> Any:
+    """Return the underlying estimator, unwrapping a Pipeline if present."""
+    if isinstance(model, Pipeline):
+        return model.steps[-1][1]
+    return model
 
 
 def _normalize_catboost_params(params: dict[str, Any]) -> dict[str, Any]:
@@ -129,24 +182,29 @@ def build_model(model_type: str, params: dict[str, Any] | None = None) -> Any:
         return CatBoostRegressor(**resolved)
 
     if model_type == "ridge":
-        estimator = Ridge()
+        # RidgeCV auto-selects alpha over a wide grid (efficient leave-one-out),
+        # which keeps the linear model stable on wide collinear SCE features.
+        # Presets pass a scalar `alpha`; it is not a RidgeCV param and is dropped
+        # by _filtered_params, so the cross-validated grid takes over.
+        estimator = RidgeCV(alphas=_RIDGE_ALPHA_GRID)
         resolved = _filtered_params(estimator, params, {})
-        return Ridge(**resolved)
+        resolved.setdefault("alphas", _RIDGE_ALPHA_GRID)
+        return _wrap_sklearn(RidgeCV(**resolved), scale=True)
 
     if model_type == "random_forest":
         estimator = RandomForestRegressor()
         resolved = _filtered_params(estimator, params, {"random_state": 42, "n_jobs": -1})
-        return RandomForestRegressor(**resolved)
+        return _wrap_sklearn(RandomForestRegressor(**resolved))
 
     if model_type == "extra_trees":
         estimator = ExtraTreesRegressor()
         resolved = _filtered_params(estimator, params, {"random_state": 42, "n_jobs": -1})
-        return ExtraTreesRegressor(**resolved)
+        return _wrap_sklearn(ExtraTreesRegressor(**resolved))
 
     if model_type == "gradient_boosting":
         estimator = GradientBoostingRegressor()
         resolved = _filtered_params(estimator, params, {"random_state": 42})
-        return GradientBoostingRegressor(**resolved)
+        return _wrap_sklearn(GradientBoostingRegressor(**resolved))
 
     supported = ", ".join(sorted(_MODEL_LABELS))
     raise ValueError(f"Unsupported model type '{model_type}'. Supported types: {supported}")
@@ -155,6 +213,7 @@ def build_model(model_type: str, params: dict[str, Any] | None = None) -> Any:
 def extract_feature_importance(model: Any, feature_names: Iterable[str]) -> pd.DataFrame:
     """Extract a normalized feature importance table when the estimator exposes one."""
     features = list(feature_names)
+    model = _final_estimator(model)
 
     if hasattr(model, "feature_importances_"):
         importance = np.asarray(model.feature_importances_, dtype=float)
