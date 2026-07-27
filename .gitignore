@@ -73,6 +73,8 @@ scripts/tmp_*.ps1
 
 # Results (regenerated)
 results/
+# GCP overnight-batch run artefacts unpacked into the repo root (not citable)
+results_gcp_*/
 
 # MkDocs build output
 site/
