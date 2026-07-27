@@ -43,8 +43,60 @@
 | walmart_weekly | full (420k), permuted −0.24% ✅, shuffled −0.90% ✅ | **PROMOTED** | **+6.35%** |
 | rossmann_daily | full (844k), permuted −0.32% ✅, shuffled −0.40% ✅ | **PROMOTED** | **+9.90%** |
 | rental_poland_long | permuted+shuffled **FAIL** | BLOCKED (correct) | +1.22% real ≈ noise (permuted gives +3.1%) |
-| sales_uae_transactions | 20k subsample: **permuted FAIL (+24.5%!)** | blocked — investigate | +8.7% real, NOT trustworthy |
-| rental_uae_contracts | 20k subsample: SCE **hurts** (−6.7% real), shuffled FAIL | blocked — investigate | — |
+| sales_uae_transactions | **full 996k: permuted +0.47% ✅ (clean), SCE real −1.70%** | BLOCKED — no benefit | subsample +8.7% was an artifact; SCE does not help on full data |
+| rental_uae_contracts | **full-data OOM on 64 GB (exit 137)** | rerun pending (high-mem VM) | unknown until rerun |
+
+### Full-data UAE verdict (2026-06-13, from GCP batch)
+
+The 20k subsamples were misleading on BOTH UAE datasets:
+
+- **sales_uae_transactions** — on full 995,975 rows the permuted-target advantage is
+  **+0.47% (PASS)**, not the +24.5% the subsample showed. So there is **no leakage
+  red flag**. But SCE's real advantage is **−1.70%** — it makes RMSE slightly worse
+  than baseline. shuffled_groups `pass=False` is *correct*: with real_advantage ≤ 0
+  there is nothing to validate. Honest conclusion: **SCE simply does not help this
+  dataset** (high-cardinality transaction IDs, little group structure). Stays in
+  `configs/experimental/`, reason updated from "leakage" → "no benefit on full data".
+- **rental_uae_contracts** — 5.48M rows (4.3 GB raw) OOM-killed all three diagnostics
+  on the 64 GB batch VM (exit 137 right after "Total hierarchy levels created: 7").
+  Full-data verdict still unknown.
+
+  **Rerun #1 (FAILED, 2026-06-13):** VM `sce-rental-uae-run` c2d-highmem-32 launched
+  but `/usr/bin/time` was not installed on Ubuntu 22.04 — `run_step()` used it as
+  a wrapper, so Python never ran (exit=127). Start and end timestamps were identical;
+  memory was untouched (249 GB free throughout). Fix: added `time` to the
+  `apt-get install` line in `scripts/gcp_rental_uae_startup.sh`.
+
+  **Rerun #2 (RUNNING, 2026-06-13 ~13:47 UTC):** VM `sce-rental-uae-run`
+  **c2d-highmem-16 (16 vCPU, 128 GB, spot)** (quota limit prevented c2d-highmem-32).
+  128 GB = 2× headroom vs the 64 GB that OOM'd. Runs only the 3 rental_uae
+  diagnostics via `scripts/gcp_rental_uae_startup.sh`, uploads to separate
+  `gs://sce-night-dochubs/done_rental_uae/` marker. Local watcher restarted:
+  `%TEMP%\sce_rental_uae_watcher.ps1` (polls every 5 min for 6 h → unpacks into
+  `results_gcp_rental_uae_<ts>/`; log `results/rental_uae_watcher.log`).
+  Check: `gcloud compute instances list --filter=name=sce-rental-uae-run` and
+  `gcloud storage ls gs://sce-night-dochubs/done_rental_uae/`.
+
+### NaN / linear-model fixes (2026-06-13)
+
+The batch had 4 hard failures (exit 1): `ridge` and `gradient_boosting` on
+`rental_poland_short` + `melbourne_housing`. Root cause: those sklearn estimators
+reject NaN inputs (SCE feature blocks contain NaN for small/empty groups), unlike
+the GBDT libraries which handle NaN natively. Fix in `sce/models.py`:
+- non-GBDT sklearn models (ridge, random_forest, extra_trees, gradient_boosting) are
+  now wrapped in an imputing `Pipeline` (`inf→nan` sanitize → median `SimpleImputer`
+  with `keep_empty_features=True` → estimator); ridge additionally gets
+  `StandardScaler` and uses `RidgeCV` (auto-alpha over a wide grid) instead of fixed
+  `alpha=1`, which prevented coefficient blow-ups.
+- `extract_feature_importance` unwraps the pipeline's final estimator.
+- Verified: all 4 previously-crashing runs now finish (exit 0); GBDT results
+  unchanged (xgboost rental_poland_short +6.73%); full suite 123/123 green.
+
+**Known limitation (not a bug):** `ridge` still posts catastrophic RMSE on
+heavy-tailed targets (e.g. rental_poland_short target spans 436 → 1,010,368, median
+3,344). Linear regression cannot fit such tails; tree models clip naturally. This is
+an inherent linear-baseline property and was already present in the batch
+(walmart ridge −246%). Ridge stays in the cross-model comparison as a weak baseline.
 
 **crossfit_ab anomaly (FYI, not blocking):** `leakage_signal_pp` is negative for both
 Walmart (−9.0%) and Rossmann (−3.6%), meaning the no-CF model slightly outperforms
@@ -96,7 +148,23 @@ Driven by `docs/plan/2026-04-18_release_1_0_plan.md`:
   (47 dirs from March/April: categorical compares, batch summaries, old search)
   so `--latest` aggregation only sees post-remediation runs.
 
-## Full batch RUNNING on GCP (launched 2026-06-12 ~17:45)
+## Full batch on GCP — COMPLETED (2026-06-12 20:14 UTC, ~4.5 h, ~$1.5 spot)
+
+Results in `results_gcp_20260613_1052/`, unpacked and copied into the repo
+(`docs/figures/paper` + `docs/figures/appendix` updated, gitignored run dirs into
+`results/`). **Not committed yet.** Outcome of the 6 phases:
+1. Cross-model compare: **31/35 OK** (4 NaN crashes — now fixed, see above).
+   `categorical_mode_batch_summary` + summary_fig1–6 regenerated from 31 runs.
+2. Search ×5: **5/5 OK** (validation-selected protocol).
+3. UAE full-data diagnostics: sales_uae **3/3 OK** (verdict above);
+   rental_uae **0/3 OOM** (rerun pending).
+4. Aggregate summary: OK. 5. Figures: summary + appendix OK;
+   `generate_figures.py` failed (needs `experiment_results.json` from a `--all`
+   run, which the batch did not produce — harmless, the paper figures come from
+   the other two scripts). 6. night_report: OK
+   (`results/night_report_20260612_201406.md`).
+
+## Earlier: full batch launch notes (2026-06-12 ~17:45)
 
 - **VM:** `sce-night-run`, c2d-standard-16 **spot** (16 vCPU, 64 GB),
   europe-central2-b, project `dochubs`, max-run-duration 12 h (auto-STOP).
