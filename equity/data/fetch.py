@@ -97,7 +97,9 @@ def _add_hlc_average(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _canonicalize_session_close(
-    index: pd.DatetimeIndex, cal, period: str = "1d"
+    index: pd.DatetimeIndex,
+    schedule: pd.DataFrame,
+    period: str = "1d",
 ) -> tuple[pd.DatetimeIndex, pd.Series]:
     """Map each exchange-local-midnight (00:00 ET) index value to the XNYS
     session-close timestamp for its date.
@@ -116,8 +118,13 @@ def _canonicalize_session_close(
     index:
         tz-aware ``America/New_York`` DatetimeIndex from yfinance (00:00 ET
         values).
-    cal:
-        ``pandas_market_calendars`` XNYS calendar instance.
+    schedule:
+        Pre-built XNYS schedule DataFrame (``pandas_market_calendars``
+        ``.schedule(...)`` output) covering the full fetch window. The
+        schedule is computed ONCE per ``fetch_yfinance_ohlcv`` call and shared
+        across all tickers (review round 2, suggestion #5: previously
+        ``cal.schedule()`` was invoked per-ticker with the same date range).
+        Must contain a ``market_close`` column.
     period:
         Bar interval (only ``"1d"`` is canonicalized; intraday periods are
         returned unchanged).
@@ -135,15 +142,13 @@ def _canonicalize_session_close(
     if period != "1d" or len(index) == 0:
         return index, pd.Series([True] * len(index), index=index)
     # Normalize each index value to its calendar date (00:00 ET -> date).
-    dates = pd.DatetimeIndex([pd.Timestamp(ts).normalize() for ts in index])
-    sched = cal.schedule(
-        dates.min().strftime("%Y-%m-%d"),
-        dates.max().strftime("%Y-%m-%d"),
-        tz=EXCHANGE_TZ,
-    )
+    # ``index.normalize()`` is the DatetimeIndex vectorized method (review
+    # round 2, nitpick #11: replaces the O(N) ``[pd.Timestamp(ts).normalize()
+    # for ts in index]`` list comprehension).
+    dates = index.normalize()
     # market_close is tz-aware America/New_York; build a date -> close map.
     closes_by_date = {}
-    for ts in sched["market_close"]:
+    for ts in schedule["market_close"]:
         closes_by_date[pd.Timestamp(ts).normalize()] = ts
     mapped = [closes_by_date.get(d) for d in dates]
     keep = [ts is not None for ts in mapped]
@@ -197,12 +202,17 @@ def fetch_yfinance_ohlcv(
     end_str = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
     # Lazily build the XNYS calendar once per call (used to canonicalize the
-    # 00:00 ET yfinance index to the 16:00/13:00 ET session close).
-    cal = None
+    # 00:00 ET yfinance index to the 16:00/13:00 ET session close). The
+    # schedule is computed ONCE for the full fetch window (review round 2,
+    # suggestion #5: previously ``cal.schedule()`` was invoked per-ticker with
+    # the same date range -- all tickers share ``[start, end+1d]``, so the
+    # schedule is identical).
+    schedule: pd.DataFrame | None = None
     if period == "1d":
         from pandas_market_calendars import get_calendar
 
         cal = get_calendar("XNYS")
+        schedule = cal.schedule(start_str, end_str, tz=EXCHANGE_TZ)
 
     # yfinance raises ``YFException`` subclasses (YFTickerMissingError,
     # YFPricesMissingError, YFRateLimitError, ...) when a fetch fails; the
@@ -248,8 +258,8 @@ def fetch_yfinance_ohlcv(
             continue
 
         idx = hist.index
-        if cal is not None:
-            idx, keep = _canonicalize_session_close(idx, cal, period=period)
+        if schedule is not None:
+            idx, keep = _canonicalize_session_close(idx, schedule, period=period)
             # Drop rows whose date has no XNYS session (holiday that slipped
             # through yfinance) from BOTH the index and the OHLCV columns so
             # the lengths stay aligned.

@@ -1,7 +1,7 @@
 """``published_at_guard`` -- point-in-time leakage diagnostic for S1.3.
 
 This module is a **join-invariant sanity check**, not a feed-side leakage
-detector. The guard asserts two invariants on the joined frame produced by
+detector. The guard asserts three invariants on the joined frame produced by
 :meth:`equity.data.loader.EquityDataLoader.join_articles_to_prices`:
 
 1. **Right-hand side** -- ``published_at <= period_close_ts`` for every row
@@ -172,13 +172,29 @@ def run_published_at_guard(
     # ---- Left-hand side: period_close(P-1) < published_at -----------------
     # The previous stored session close must be strictly before published_at
     # (OR the row is the first stored session -- no previous session exists).
+    # Vectorized (review round 2, issue #3): the per-row Python loop is
+    # replaced with a single ``np.where`` over numpy arrays -- the same LHS
+    # semantics (``sorted_closes[close_pos - 1] >= pub_utc`` when there IS a
+    # previous session, ``False`` otherwise). Preserves the R1 m1 regression
+    # contract exactly.
     sorted_closes = pd.DatetimeIndex(sorted(set(pc_utc)))
     close_pos = sorted_closes.get_indexer(pc_utc.to_numpy(), method="pad")
-    lhs_violation = np.zeros(len(joined_df), dtype=bool)
-    for i, p in enumerate(close_pos):
-        if p > 0:  # has a previous stored session
-            if sorted_closes[p - 1] >= pub_utc.iloc[i]:
-                lhs_violation[i] = True
+    # Both sides are tz-aware UTC; strip the tz to tz-naive datetime64[ns] in
+    # UTC for a single vectorized numpy comparison (avoids the object-array
+    # comparison failure between ``DatetimeIndex.values`` (datetime64) and
+    # ``tz-aware Series.to_numpy()`` (object of Timestamps)).
+    sorted_naive = sorted_closes.tz_localize(None).to_numpy()
+    pub_naive = pub_utc.dt.tz_localize(None).to_numpy()
+    # close_pos == 0 (first session) -> no previous -> LHS holds (not a
+    # violation). close_pos == -1 (not found) -> also not a violation here
+    # (the RHS check or FK check catches it; the LHS guard is scoped to the
+    # "previous session" rule only). Use np.where to avoid negative-index
+    # garbage where close_pos <= 0 (False-masked by np.where).
+    lhs_violation = np.where(
+        close_pos > 0,
+        sorted_naive[np.where(close_pos > 0, close_pos - 1, 0)] >= pub_naive,
+        False,
+    )
 
     violation_mask = rhs_violation | lhs_violation
 
@@ -208,6 +224,40 @@ def run_published_at_guard(
     }
 
 
+def _resolve_prices_path_from_universe(universe_name: str) -> Path | None:
+    """Resolve the prices store path from the universe TOML's
+    ``[prices].output_dir`` (review round 2, suggestion #6).
+
+    Returns the resolved absolute path if the TOML exists and has a
+    ``[prices].output_dir``; returns ``None`` if the TOML/prices section is
+    missing, the universe is unknown, or the resolved path does not exist.
+    The caller is expected to warn and skip FK integrity when ``None`` is
+    returned (do NOT hard-fail -- the PIT check still runs).
+    """
+    try:
+        from equity.data.registry import PROJECT_ROOT, get_universe_info
+
+        info = get_universe_info(universe_name)
+    except (FileNotFoundError, ValueError):
+        return None
+    try:
+        import tomllib
+
+        with info.path.open("rb") as handle:
+            payload = tomllib.load(handle)
+    except (OSError, ValueError):
+        return None
+    prices_rel = payload.get("prices", {}).get("output_dir")
+    if not prices_rel:
+        return None
+    prices_path = Path(prices_rel)
+    if not prices_path.is_absolute():
+        prices_path = PROJECT_ROOT / prices_path
+    if not prices_path.exists():
+        return None
+    return prices_path
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -230,7 +280,11 @@ def main() -> int:
             "Path to the partitioned prices parquet store. Required when "
             "--joined is absent (the guard builds the join itself). When "
             "--joined IS provided, --prices enables the FK integrity check "
-            "(every joined period_close_ts must exist in the prices store)."
+            "(every joined period_close_ts must exist in the prices store). "
+            "If omitted with --joined, the prices store is resolved from the "
+            "universe TOML [prices].output_dir (review round 2, suggestion #6) "
+            "so the documented one-arg form also runs FK integrity; falls back "
+            "to PIT-only if the TOML/prices can't be resolved."
         ),
     )
     parser.add_argument(
@@ -241,8 +295,9 @@ def main() -> int:
         "--universe",
         default="sp500",
         help=(
-            "Universe name for the no-joined CLI path (resolves "
-            "configs/equity/<name>.toml). Default: 'sp500'."
+            "Universe name for resolving --prices from the TOML when --joined "
+            "is given without --prices (resolves configs/equity/<name>.toml). "
+            "Default: 'sp500'."
         ),
     )
     parser.add_argument(
@@ -257,8 +312,39 @@ def main() -> int:
     prices_df: pd.DataFrame | None = None
     if args.joined:
         joined = pd.read_parquet(args.joined)
-        if args.prices:
-            prices_df = pd.read_parquet(args.prices)
+        # Review round 2, suggestion #6: resolve --prices from the universe
+        # TOML [prices].output_dir BY DEFAULT when --joined is given without
+        # --prices, so the documented one-arg form also runs FK integrity. If
+        # the TOML/prices can't be resolved, warn and run PIT-only (don't
+        # hard-fail -- the PIT check is the primary invariant).
+        prices_path = args.prices
+        if prices_path is None:
+            prices_path_resolved = _resolve_prices_path_from_universe(args.universe)
+            if prices_path_resolved is not None:
+                prices_path = str(prices_path_resolved)
+            else:
+                import logging
+
+                logging.getLogger("equity.diagnostics.published_at_guard").warning(
+                    "FK integrity check skipped: no --prices given and could "
+                    "not resolve [prices].output_dir from universe '%s' TOML "
+                    "(missing section, unknown universe, or path does not "
+                    "exist). Run with --prices <dir> to enable FK integrity.",
+                    args.universe,
+                )
+        if prices_path is not None:
+            try:
+                prices_df = pd.read_parquet(prices_path)
+            except (FileNotFoundError, OSError, ValueError) as exc:
+                import logging
+
+                logging.getLogger("equity.diagnostics.published_at_guard").warning(
+                    "Could not read prices store at %s for FK check (%s); "
+                    "running PIT-only.",
+                    prices_path,
+                    exc,
+                )
+                prices_df = None
     else:
         if not args.prices or not args.articles:
             parser.error(
@@ -288,11 +374,18 @@ def main() -> int:
     try:
         result = run_published_at_guard(joined, prices_df=prices_df)
     except ValueError as exc:
-        # FK integrity violation surfaces here as exit 1.
+        # FK integrity violation surfaces here as exit 1. Review round 2,
+        # issue #2: populate ``violations`` with a synthetic entry so the
+        # result schema is consistent across both the normal path and the
+        # except path (downstream JSON consumers see one shape, not two).
+        synthetic = {
+            "type": "fk_error",
+            "message": str(exc),
+        }
         result = {
             "pass": False,
             "n_violations": 1,
-            "violations": [],
+            "violations": [synthetic],
             "n_checked": int(len(joined)),
             "fk_checked": prices_df is not None,
             "error": str(exc),

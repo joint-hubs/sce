@@ -11,7 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
+import re
 import shutil
+import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -64,16 +67,37 @@ def _dead_reason(
     return "outside window"
 
 
+# Ticker control-char validation (review round 2, nitpick #14). A hand-edited
+# CSV with a newline / null byte / percent-encoded sequence in a ticker could
+# produce a malformed Hive partition path or confused warning logs. Allowed
+# characters: uppercase A-Z, digits, dot, hyphen (matches the S&P 500 seed
+# including tickers like ``BRK.B``).
+_TICKER_RE = re.compile(r"[A-Z0-9.\-]+")
+
+
 def _resolve_store_path(out_dir: str | Path, default_rel: str) -> Path:
     """Resolve a store output dir to an absolute path under PROJECT_ROOT.
 
     Relative paths are joined to ``PROJECT_ROOT``; absolute paths are honored
-    verbatim (the caller is responsible for not pointing at ``C:\\`` etc. --
-    :func:`_safe_rmtree` enforces a containment guard before any deletion).
+    verbatim but MUST resolve to a path inside ``PROJECT_ROOT`` -- a
+    misconfigured TOML ``output_dir = "C:\\Users\\..."`` would otherwise write
+    the parquet store outside the repo (and then :func:`_safe_rmtree` would
+    refuse to clean it, leaving corrupted state). The containment check lives
+    here (review round 2, suggestion #4) so BOTH write and delete require
+    PROJECT_ROOT membership (symmetric error condition).
     """
     out_path = Path(out_dir)
     if not out_path.is_absolute():
         out_path = PROJECT_ROOT / out_path
+    resolved = out_path.resolve()
+    try:
+        resolved.relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        raise ValueError(
+            f"Refusing to resolve store path {out_path}: resolved path "
+            f"{resolved} is outside PROJECT_ROOT ({PROJECT_ROOT}). "
+            "Store output_dir must live under the repo root."
+        )
     return out_path
 
 
@@ -93,24 +117,19 @@ def _ensure_store_marker(out_path: Path) -> None:
 
 
 def _safe_rmtree(out_path: Path) -> None:
-    """Remove ``out_path`` if and only if it is inside ``PROJECT_ROOT`` AND
-    contains the ``.equity_store`` marker.
+    """Remove ``out_path`` if and only if it contains the ``.equity_store``
+    sentinel marker.
 
     Defense against a misconfigured TOML / CLI ``output_dir`` pointing at an
-    existing tree outside the repo (``C:\\Users\\...``, ``~/``, repo root). A
-    missing marker on an existing directory is treated as "this is not ours"
-    and the rmtree is refused (raise :class:`ValueError`); on first creation
-    the marker is written by :func:`_ensure_store_marker`.
+    existing tree outside the repo (``C:\\Users\\...``, ``~/``, repo root). The
+    PROJECT_ROOT containment check is enforced upstream in
+    :func:`_resolve_store_path` (review round 2, suggestion #4) so by the time
+    ``_safe_rmtree`` is invoked the path is already verified to live under the
+    repo root; a missing marker on an existing directory is treated as "this is
+    not ours" and the rmtree is refused (raise :class:`ValueError`); on first
+    creation the marker is written by :func:`_ensure_store_marker`.
     """
     resolved = out_path.resolve()
-    try:
-        resolved.relative_to(PROJECT_ROOT.resolve())
-    except ValueError:
-        raise ValueError(
-            f"Refusing to remove {out_path}: resolved path "
-            f"{resolved} is outside PROJECT_ROOT ({PROJECT_ROOT}). "
-            "Store output_dir must live under the repo root."
-        )
     if not resolved.exists():
         return
     marker = resolved / STORE_MARKER
@@ -129,11 +148,14 @@ def _store_content_hash(df: pd.DataFrame) -> str:
 
     The frame is serialized to a sorted JSON list of records (columns in
     canonical order, rows sorted by all columns) so two calls producing the
-    same logical frame yield the same hash regardless of row order.
+    same logical frame yield the same hash regardless of row order. The
+    canonical dtypes (str, float, tz-aware datetime) are all natively
+    JSON-serializable via ``date_format="iso"`` -- no ``default_handler`` is
+    needed (review round 2, nitpick #13: removed dead ``default_handler=str``).
     """
     cols = list(df.columns)
     sorted_df = df.sort_values(cols).reset_index(drop=True)
-    payload = sorted_df.to_json(orient="records", date_format="iso", default_handler=str)
+    payload = sorted_df.to_json(orient="records", date_format="iso")
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -155,6 +177,13 @@ def _write_store_meta(
     the same window can be compared for reproducibility drift (see review
     finding M3 -- yfinance is an unofficial scraper whose historical values
     can be revised retroactively).
+
+    Atomic write (review round 2, nitpick #15): the metadata is written to a
+    temp file in the same directory, then ``os.replace`` swaps it into place
+    (atomic on POSIX and Windows). A crash between the parquet write and the
+    metadata write leaves a temp file (cleaned up by the next run) but NOT a
+    half-written ``_meta.json`` that the ``frozen`` short-circuit would
+    silently ignore. ``os.chmod(..., 0o644)`` enforces least-privilege perms.
     """
     meta: dict[str, Any] = {
         "kind": kind,
@@ -167,11 +196,91 @@ def _write_store_meta(
     if extra:
         meta.update(extra)
     meta_path = out_path / "_meta.json"
-    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+    fd, tmp_name = tempfile.mkstemp(prefix="_meta_", suffix=".tmp", dir=str(out_path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(meta, indent=2, sort_keys=True))
+        os.chmod(tmp_name, 0o644)
+        os.replace(tmp_name, meta_path)
+    except Exception:
+        # Best-effort cleanup of the temp file on failure; the atomic swap
+        # has not happened, so the existing _meta.json (if any) is intact.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     return meta_path
 
 
 log = logging.getLogger(__name__)
+
+
+def _frozen_store_covers_window(
+    meta_path: Path,
+    *,
+    kind: str,
+    period: str | None,
+    request_start: pd.Timestamp,
+    request_end: pd.Timestamp,
+) -> bool:
+    """Return True iff the existing store's ``_meta.json`` describes a ``kind``
+    store whose persisted ``window_start`` / ``window_end`` covers the
+    ``[request_start, request_end]`` request.
+
+    Review round 2, issue #1 (major): the ``frozen`` short-circuit previously
+    checked only ``kind`` / ``period`` (the bar interval, e.g. ``"1d"``) --
+    NOT the time window. ``_meta.json`` has persisted ``window_start`` /
+    ``window_end`` since round 1, but they were never consulted, so
+    ``fetch_prices(frozen=True)`` for window B silently returned a store built
+    for window A. This helper restores the documented contract: short-circuit
+    only when the persisted window covers the request.
+
+    Backward-compat: old stores written before window-meta existed lack
+    ``window_start`` / ``window_end`` -- ``meta.get(...)`` returns ``None``,
+    which is treated as "does not cover" (do NOT silently return stale data;
+    fall through to a refetch). A parse failure (corrupt JSON) is also treated
+    as "does not cover" with a WARNING log.
+    """
+    if not meta_path.exists():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        log.warning(
+            "Could not parse %s (%s); treating as not-covering (frozen falls "
+            "through to a refetch).",
+            meta_path,
+            exc,
+        )
+        return False
+    if meta.get("kind") != kind:
+        return False
+    if period is not None and meta.get("period") != period:
+        return False
+    w_start = meta.get("window_start")
+    w_end = meta.get("window_end")
+    if w_start is None or w_end is None:
+        # Old store written before window-meta existed -> treat as not-covering
+        # (do NOT silently return stale data; let the caller refetch).
+        log.info(
+            "%s missing window_start/window_end; treating as not-covering "
+            "(frozen falls through to a refetch).",
+            meta_path,
+        )
+        return False
+    try:
+        store_start = _to_timestamp(w_start)
+        store_end = _to_timestamp(w_end)
+    except (TypeError, ValueError) as exc:
+        log.warning(
+            "%s has unparseable window_start/window_end (%s); treating as "
+            "not-covering.",
+            meta_path,
+            exc,
+        )
+        return False
+    return store_start <= request_start and store_end >= request_end
 
 
 class EquityDataLoader:
@@ -240,6 +349,16 @@ class EquityDataLoader:
                     f"Universe file '{universe_path.name}' missing required column '{col}'."
                 )
         self._frame["ticker"] = self._frame["ticker"].astype(str)
+        # Control-char validation (review round 2, nitpick #14): reject
+        # tickers containing newlines / null bytes / percent-encoded sequences
+        # that could produce malformed Hive partition paths or confused logs.
+        # The universe file is committed (not user-supplied), so an assertion
+        # is the right shape (defense-in-depth, not user-facing validation).
+        for ticker in self._frame["ticker"]:
+            assert _TICKER_RE.fullmatch(ticker), (
+                f"Universe file '{universe_path.name}': ticker '{ticker}' "
+                "contains invalid characters (allowed: A-Z 0-9 . -)."
+            )
         for col in ("listed_at", "delisted_at"):
             self._frame[col] = pd.to_datetime(self._frame[col], errors="coerce")
         self._frame = self._frame.drop_duplicates(subset="ticker", keep="first").reset_index(
@@ -389,23 +508,22 @@ class EquityDataLoader:
 
         if frozen and out_path.exists():
             meta_path = out_path / "_meta.json"
-            if meta_path.exists():
-                try:
-                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                    if meta.get("kind") == "prices" and meta.get("period") == self.period:
-                        log.info(
-                            "frozen prices store already present at %s "
-                            "(period=%s); skipping re-fetch.",
-                            out_path,
-                            self.period,
-                        )
-                        return out_path
-                except (OSError, ValueError) as exc:
-                    log.warning(
-                        "Could not parse %s (%s); ignoring frozen flag.",
-                        meta_path,
-                        exc,
-                    )
+            if _frozen_store_covers_window(
+                meta_path,
+                kind="prices",
+                period=self.period,
+                request_start=self.start,
+                request_end=self.end,
+            ):
+                log.info(
+                    "frozen prices store already present at %s (period=%s, "
+                    "window=[%s, %s]); skipping re-fetch.",
+                    out_path,
+                    self.period,
+                    self.start.date(),
+                    self.end.date(),
+                )
+                return out_path
 
         alive = self.universe()
         tickers = [t for (t, _listed, _delisted) in alive]
@@ -542,12 +660,23 @@ class EquityDataLoader:
                 "data/equity/articles",
             )
 
-        if frozen and out_path.exists() and (out_path / "_meta.json").exists():
-            log.info(
-                "frozen articles store already present at %s; skipping re-write.",
-                out_path,
-            )
-            return out_path
+        if frozen and out_path.exists():
+            meta_path = out_path / "_meta.json"
+            if _frozen_store_covers_window(
+                meta_path,
+                kind="articles",
+                period="seed",
+                request_start=self.start,
+                request_end=self.end,
+            ):
+                log.info(
+                    "frozen articles store already present at %s "
+                    "(window=[%s, %s]); skipping re-write.",
+                    out_path,
+                    self.start.date(),
+                    self.end.date(),
+                )
+                return out_path
 
         seed_rel = articles_cfg.get("seed_file", "configs/equity/articles_seed.csv")
         seed_path = Path(seed_rel)
@@ -589,6 +718,8 @@ class EquityDataLoader:
             extra={
                 "universe": self.universe_name,
                 "seed_file": str(seed_path),
+                "window_start": self.start.date().isoformat(),
+                "window_end": self.end.date().isoformat(),
             },
         )
         return out_path
@@ -742,6 +873,7 @@ class EquityDataLoader:
         )
         if len(closes_utc) == 0:
             raise ValueError("Prices store has no session-close timestamps.")
+        first_close_utc = closes_utc[0]
 
         # Vectorized bfill (review finding m3): single get_indexer call on the
         # numpy array, no Python per-row loop. bfill returns the smallest i
@@ -751,11 +883,29 @@ class EquityDataLoader:
         pub_utc = articles["published_at"].dt.tz_convert("UTC").to_numpy()
         pos = closes_utc.get_indexer(pub_utc, method="bfill")
 
+        # Review round 2, question #7 (lead decision: DROP SYMMETRICALLY):
+        # an article with published_at < closes_utc[0] (before the first stored
+        # session) has no prior_close -> cannot form a PIT training pair
+        # (period_close(P-1) < published_at is undefined). Previously bfill
+        # returned 0 for such rows and they were silently bound to the first
+        # session -- semantically odd (stale news -> far-future close). Now
+        # they are dropped symmetrically with post-window articles. An article
+        # published exactly AT the first session close is kept (RHS holds
+        # with equality, LHS holds vacuously -- no previous session exists).
         joined_rows: list[dict] = []
-        n_dropped = 0
+        n_dropped_pre = 0
+        n_dropped_post = 0
         for i, p in enumerate(pos):
+            pub_ts = pd.Timestamp(pub_utc[i])
             if p < 0:
-                n_dropped += 1
+                # published_at > last stored session close -> drop.
+                n_dropped_post += 1
+                continue
+            if pub_ts < first_close_utc:
+                # published_at < first stored session close -> drop (q7).
+                # bfill returns 0 here (closes_utc[0] >= pub), but there is no
+                # prior_close to form a PIT pair, so we mirror post-window.
+                n_dropped_pre += 1
                 continue
             period_close_utc = pd.Timestamp(closes_utc[p])
             row = articles.iloc[i]
@@ -765,7 +915,7 @@ class EquityDataLoader:
                     # Canonicalize BOTH columns to UTC in the joined output
                     # (review finding n3) so downstream slices are tz-uniform.
                     "period_close_ts": period_close_utc,
-                    "published_at": pd.Timestamp(pub_utc[i]),
+                    "published_at": pub_ts,
                     "text": row["text"],
                     "source": row["source"],
                 }
@@ -773,15 +923,19 @@ class EquityDataLoader:
 
         if not joined_rows:
             raise ValueError(
-                "No articles could be bound to a trading period present in "
-                "the prices store (all " + str(len(articles)) + " articles "
-                "were published after the last stored session close)."
+                f"No articles could be bound to a trading period present in "
+                f"the prices store (all {len(articles)} articles were outside "
+                f"the store's session coverage: {n_dropped_pre} before the "
+                f"first session, {n_dropped_post} after the last session)."
             )
-        if n_dropped > 0:
+        if n_dropped_pre > 0 or n_dropped_post > 0:
             log.info(
                 "join_articles_to_prices: dropped %d article(s) published "
-                "after the last stored session close (under-inclusion).",
-                n_dropped,
+                "before the first stored session close (under-inclusion) and "
+                "%d article(s) published after the last stored session close "
+                "(under-inclusion).",
+                n_dropped_pre,
+                n_dropped_post,
             )
 
         joined = pd.DataFrame(joined_rows)

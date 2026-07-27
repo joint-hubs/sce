@@ -15,14 +15,14 @@ pattern; NOT imported into `sce/`):
   tickers=None)`; `.universe()` (delisting-aware `(ticker, listed_at,
   delisted_at)` tuples); `.fetch_prices()` (yfinance OHLCV → Hive-partitioned
   `prices.parquet`, cols `ticker,period_close_ts,open,high,low,close,adj_close,
-  volume,vwap`); `.fetch_articles()` (seed → `articles.parquet`);
+  volume,hlc_average`); `.fetch_articles()` (seed → `articles.parquet`);
   `.join_articles_to_prices()` (point-in-time join via XNYS calendar; rule
   `period_close(P-1) < published_at <= period_close(P)` + holiday roll-forward).
 - `equity/data/schema.py` — pandera `prices_schema` (tz-aware
   `America/New_York`) + `articles_schema` (tz-aware UTC) + `validate_*` +
   PK-uniqueness helpers. **First pandera use + first tz-aware code in repo.**
 - `equity/data/fetch.py` — `fetch_yfinance_ohlcv` (in-process, no subprocess;
-  VWAP proxy `(h+l+c)/3`) + `fetch_articles_from_seed`.
+  `hlc_average = (high + low + close) / 3`) + `fetch_articles_from_seed`.
 - `equity/data/registry.py` — `UniverseInfo` + `list_universes()`/
   `get_universe_info()` (globs `configs/equity/*.toml`).
 - `equity/diagnostics/published_at_guard.py` — CLI

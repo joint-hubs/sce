@@ -90,6 +90,10 @@ def _fake_ohlcv(tickers, start, end, period="1d"):
 def test_fetch_prices_writes_partitioned_parquet(tmp_path, monkeypatch):
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    # Point PROJECT_ROOT (in loader's namespace) at tmp_path so the
+    # _resolve_store_path containment guard (review round 2, suggestion #4)
+    # permits writing under tmp_path (which is outside the real repo root).
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -112,6 +116,7 @@ def test_fetch_prices_writes_partitioned_parquet(tmp_path, monkeypatch):
 def test_fetch_prices_readback_has_canonical_cols_and_tz(tmp_path, monkeypatch):
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -137,6 +142,7 @@ def test_fetch_prices_readback_has_canonical_cols_and_tz(tmp_path, monkeypatch):
 def test_fetch_prices_primary_key_is_unique(tmp_path, monkeypatch):
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -154,21 +160,22 @@ def test_fetch_prices_primary_key_is_unique(tmp_path, monkeypatch):
 
 def test_fetch_prices_full_rewrite_clears_stale_partitions(tmp_path, monkeypatch):
     """fetch_prices is a full rewrite: stale partitions from a prior run are
-    removed, not merged. Uses a path INSIDE PROJECT_ROOT (with the
-    ``.equity_store`` marker) because the containment guard refuses to rmtree
-    paths outside the repo."""
+    removed, not merged. Uses a path under a tmp_path-rooted PROJECT_ROOT (with
+    the ``.equity_store`` marker) -- review round 2, nitpick #12: no stale
+    dirs left under the real repo root."""
     from equity.data.fetch import STORE_MARKER
-    from equity.data.registry import PROJECT_ROOT
 
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
 
-    # Use a path inside PROJECT_ROOT (so the rmtree guard permits the rewrite)
-    # and write the sentinel marker so an existing dir is recognized as ours.
-    out_dir = PROJECT_ROOT / "data" / "equity" / "_test_stale_prices"
+    # Use a path inside the (tmp_path-rooted) PROJECT_ROOT so the containment
+    # guard permits the rewrite, and write the sentinel marker so an existing
+    # dir is recognized as ours.
+    out_dir = tmp_path / "data" / "equity" / "_test_stale_prices"
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / STORE_MARKER).write_text("marker", encoding="utf-8")
     # Seed a stale partition that the fake would never write.
@@ -176,18 +183,12 @@ def test_fetch_prices_full_rewrite_clears_stale_partitions(tmp_path, monkeypatch
     stale.mkdir(parents=True)
     (stale / "stale.parquet").write_bytes(b"NOT PARQUET -- stale sentinel")
 
-    try:
-        loader = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
-        loader.fetch_prices(output_dir=out_dir)
+    loader = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
+    loader.fetch_prices(output_dir=out_dir)
 
-        assert not stale.exists(), "stale partition should have been removed"
-        # And valid 2024 partitions exist.
-        assert (out_dir / "year=2024" / "month=1").exists()
-    finally:
-        import shutil as _sh
-
-        if out_dir.exists():
-            _sh.rmtree(out_dir)
+    assert not stale.exists(), "stale partition should have been removed"
+    # And valid 2024 partitions exist.
+    assert (out_dir / "year=2024" / "month=1").exists()
 
 
 def test_fetch_prices_empty_universe_raises(tmp_path, monkeypatch):
@@ -205,6 +206,7 @@ def test_fetch_prices_empty_universe_raises(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -337,31 +339,22 @@ def test_fetch_prices_refuses_rmtree_without_marker(tmp_path, monkeypatch):
     ``.equity_store`` marker must NOT be rmtree'd -- refuse with ValueError."""
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
 
-    # Build a directory inside PROJECT_ROOT without the sentinel marker.
-    # Use the actual PROJECT_ROOT via the loader's resolution: write to a
-    # path the loader resolves under PROJECT_ROOT but pre-create WITHOUT the
-    # marker.
-    from equity.data.registry import PROJECT_ROOT
-
-    target = PROJECT_ROOT / "data" / "equity" / "_test_no_marker"
+    # Build a directory inside the (tmp_path-rooted) PROJECT_ROOT WITHOUT the
+    # sentinel marker -- review round 2, nitpick #12: no stale dirs under the
+    # real repo root.
+    target = tmp_path / "data" / "equity" / "_test_no_marker"
     target.mkdir(parents=True, exist_ok=True)
     canary = target / "CANARY.txt"
     canary.write_text("survive", encoding="utf-8")
-    try:
-        loader = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
-        with pytest.raises(ValueError, match="missing sentinel marker"):
-            loader.fetch_prices(output_dir=target)
-        assert canary.exists(), "canary was deleted despite missing marker"
-    finally:
-        # Cleanup the canary we created under PROJECT_ROOT.
-        import shutil as _sh
-
-        if target.exists():
-            _sh.rmtree(target)
+    loader = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
+    with pytest.raises(ValueError, match="missing sentinel marker"):
+        loader.fetch_prices(output_dir=target)
+    assert canary.exists(), "canary was deleted despite missing marker"
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +365,7 @@ def test_fetch_prices_refuses_rmtree_without_marker(tmp_path, monkeypatch):
 def test_fetch_prices_writes_meta_json(tmp_path, monkeypatch):
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -393,11 +387,16 @@ def test_fetch_prices_writes_meta_json(tmp_path, monkeypatch):
     # fetched_at_utc must be a tz-aware UTC ISO string (NOT utcnow() naive).
     assert pd.Timestamp(meta["fetched_at_utc"]).tz is not None
     assert meta.get("yfinance_version")
+    # Round 2, issue #1: window_start/window_end must be persisted so the
+    # frozen short-circuit can verify coverage.
+    assert meta.get("window_start") == "2024-01-01"
+    assert meta.get("window_end") == "2024-02-28"
 
 
 def test_fetch_prices_frozen_refuses_refetch(tmp_path, monkeypatch):
     _write_synthetic_universe(tmp_path)
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(
         "equity.data.fetch.fetch_yfinance_ohlcv", _fake_ohlcv
     )
@@ -414,6 +413,89 @@ def test_fetch_prices_frozen_refuses_refetch(tmp_path, monkeypatch):
     assert out2 == out
     assert meta_path.stat().st_mtime_ns == first_mtime, (
         "frozen flag should have prevented re-fetch / meta rewrite"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Round 2, issue #1: frozen window-check.
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_prices_frozen_rejects_stale_window(tmp_path, monkeypatch):
+    """frozen=True must NOT short-circuit when the existing store's window does
+    NOT cover the requested [start, end] (review round 2, issue #1, major).
+
+    Build a store for window A (Jan-Feb 2024), then call fetch_prices(frozen=True)
+    for a DIFFERENT window B (June 2024) -- the store's window does not cover
+    the request, so frozen must fall through to a refetch (the fake is called a
+    second time).
+    """
+    _write_synthetic_universe(tmp_path)
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
+
+    call_count = {"n": 0}
+
+    def _counting_fake(tickers, start, end, period="1d"):
+        call_count["n"] += 1
+        return _fake_ohlcv(tickers, start, end, period)
+
+    monkeypatch.setattr("equity.data.fetch.fetch_yfinance_ohlcv", _counting_fake)
+
+    out_dir = tmp_path / "prices"
+    loader_a = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
+    loader_a.fetch_prices(output_dir=out_dir)
+    assert call_count["n"] == 1, "initial fetch should call the fake once"
+
+    # frozen=True for a DIFFERENT window must NOT short-circuit.
+    loader_b = EquityDataLoader("synthetic", "2024-06-01", "2024-06-30")
+    out2 = loader_b.fetch_prices(output_dir=out_dir, frozen=True)
+    assert call_count["n"] == 2, (
+        "frozen short-circuited for a non-covering window (should have refetched)"
+    )
+    # The store's meta must reflect the NEW window (was rewritten).
+    import json
+
+    meta = json.loads((out2 / "_meta.json").read_text(encoding="utf-8"))
+    assert meta["window_start"] == "2024-06-01"
+    assert meta["window_end"] == "2024-06-30"
+
+
+def test_fetch_prices_frozen_treats_missing_window_as_not_covering(tmp_path, monkeypatch):
+    """An old store written before window-meta existed (no window_start/
+    window_end in _meta.json) must NOT short-circuit frozen -- backward-compat
+    for the round-2 issue #1 fix (do NOT silently return stale data)."""
+    _write_synthetic_universe(tmp_path)
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
+
+    call_count = {"n": 0}
+
+    def _counting_fake(tickers, start, end, period="1d"):
+        call_count["n"] += 1
+        return _fake_ohlcv(tickers, start, end, period)
+
+    monkeypatch.setattr("equity.data.fetch.fetch_yfinance_ohlcv", _counting_fake)
+
+    out_dir = tmp_path / "prices"
+    loader = EquityDataLoader("synthetic", "2024-01-01", "2024-02-28")
+    out = loader.fetch_prices(output_dir=out_dir)
+    meta_path = out / "_meta.json"
+    assert call_count["n"] == 1
+
+    # Simulate an old store by stripping window_start/window_end from meta.
+    import json
+
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    del meta["window_start"]
+    del meta["window_end"]
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+
+    # frozen=True must NOT short-circuit (no window meta -> treat as not-covering).
+    loader.fetch_prices(output_dir=out_dir, frozen=True)
+    assert call_count["n"] == 2, (
+        "frozen short-circuited for a store missing window_start/window_end "
+        "(should have refetched)"
     )
 
 

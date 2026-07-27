@@ -553,6 +553,77 @@ def test_join_all_articles_after_last_session_raises(tmp_path):
         )
 
 
+def test_join_drops_articles_published_before_first_session(tmp_path):
+    """An article published BEFORE the first stored session close has no
+    prior_close -> cannot form a PIT training pair -> must be DROPPED
+    symmetrically with post-window articles (review round 2, question #7,
+    lead decision: DROP SYMMETRICALLY).
+
+    When ALL articles are pre-window, the join raises ValueError (mirroring
+    the post-window ``test_join_all_articles_after_last_session_raises``).
+    """
+    prices = _build_synthetic_prices()  # first session = 2024-07-01 20:00 UTC
+    prices_path = tmp_path / "prices.parquet"
+    prices.to_parquet(prices_path, index=False)
+    # Article published 2024-06-01 (well before the first 2024-07-01 session).
+    articles = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "published_at": pd.to_datetime(
+                ["2024-06-01T10:00:00+00:00"], utc=True
+            ),
+            "text": ["pre-window"],
+            "source": ["reuters"],
+        }
+    )
+    articles_path = tmp_path / "articles.parquet"
+    articles.to_parquet(articles_path, index=False)
+    loader = EquityDataLoader("sp500", "2024-06-01", "2024-07-08")
+    with pytest.raises(ValueError, match="No articles could be bound"):
+        loader.join_articles_to_prices(
+            prices_path=prices_path, articles_path=articles_path
+        )
+
+
+def test_join_drops_pre_window_articles_keeps_valid_ones(tmp_path):
+    """When SOME articles are pre-window and others are in-window, only the
+    pre-window ones are dropped; the in-window ones are bound normally
+    (review round 2, question #7)."""
+    prices = _build_synthetic_prices()  # first session = 2024-07-01 20:00 UTC
+    prices_path = tmp_path / "prices.parquet"
+    prices.to_parquet(prices_path, index=False)
+    articles = pd.DataFrame(
+        {
+            "ticker": ["AAPL", "MSFT"],
+            "published_at": pd.to_datetime(
+                [
+                    "2024-06-01T10:00:00+00:00",  # pre-window -> dropped
+                    "2024-07-02T09:15:00+00:00",  # in-window -> kept
+                ],
+                utc=True,
+            ),
+            "text": ["pre-window", "in-window"],
+            "source": ["reuters", "bloomberg"],
+        }
+    )
+    articles_path = tmp_path / "articles.parquet"
+    articles.to_parquet(articles_path, index=False)
+    loader = EquityDataLoader("sp500", "2024-06-01", "2024-07-08")
+    joined = pd.read_parquet(
+        loader.join_articles_to_prices(
+            prices_path=prices_path, articles_path=articles_path
+        )
+    )
+    # Pre-window article dropped, in-window article kept.
+    assert "pre-window" not in set(joined["text"]), "pre-window article was not dropped"
+    assert "in-window" in set(joined["text"])
+    assert len(joined) == 1
+    # The kept article's PIT inequality must hold.
+    pc_utc = pd.Timestamp(joined.iloc[0]["period_close_ts"]).tz_convert("UTC")
+    pub_utc = pd.Timestamp(joined.iloc[0]["published_at"]).tz_convert("UTC")
+    assert pub_utc <= pc_utc, "RHS PIT inequality violated for the kept article"
+
+
 def test_run_published_at_guard_tz_naive_period_close_raises():
     joined = pd.DataFrame(
         {
@@ -777,6 +848,10 @@ def test_fetch_articles_writes_partitioned_parquet(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    # The TOML's [articles].output_dir is under tmp_path (outside the real
+    # PROJECT_ROOT); monkeypatch loader.PROJECT_ROOT so the round-2 containment
+    # guard (suggestion #4) permits the write.
+    monkeypatch.setattr("equity.data.loader.PROJECT_ROOT", tmp_path)
 
     loader = EquityDataLoader("sp500", "2024-07-01", "2024-07-31")
     out = loader.fetch_articles()  # uses [articles].output_dir from TOML
@@ -787,4 +862,361 @@ def test_fetch_articles_writes_partitioned_parquet(tmp_path, monkeypatch):
     assert str(df["published_at"].dt.tz) == "UTC"
     # _meta.json provenance written.
     assert (out / "_meta.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Round 2, suggestion #6: FK integrity default-on from universe TOML.
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_prices_path_from_universe_resolves_toml(tmp_path, monkeypatch):
+    """``_resolve_prices_path_from_universe`` returns the absolute prices path
+    from ``[prices].output_dir`` when the TOML exists and the path exists
+    (review round 2, suggestion #6)."""
+    from equity.diagnostics.published_at_guard import (
+        _resolve_prices_path_from_universe,
+    )
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    prices_dir = tmp_path / "prices"
+    prices_dir.mkdir()
+    (prices_dir / "_meta.json").write_text("{}", encoding="utf-8")
+    csv_path = tmp_path / "u.csv"
+    csv_path.write_text("ticker,listed_at,delisted_at,name\nAAPL,,,Apple\n", encoding="utf-8")
+    (cfg_dir / "u.toml").write_text(
+        f'[universe]\nname = "u"\nsource = "test"\n'
+        f'universe_file = "{csv_path.as_posix()}"\n'
+        f'\n[prices]\noutput_dir = "{prices_dir.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr("equity.data.registry.PROJECT_ROOT", tmp_path)
+
+    resolved = _resolve_prices_path_from_universe("u")
+    assert resolved is not None
+    assert resolved == prices_dir
+
+
+def test_resolve_prices_path_returns_none_when_prices_missing(tmp_path, monkeypatch):
+    """``_resolve_prices_path_from_universe`` returns None when the prices path
+    doesn't exist (review round 2, suggestion #6: caller warns + runs PIT-only)."""
+    from equity.diagnostics.published_at_guard import (
+        _resolve_prices_path_from_universe,
+    )
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    csv_path = tmp_path / "u.csv"
+    csv_path.write_text("ticker,listed_at,delisted_at,name\nAAPL,,,Apple\n", encoding="utf-8")
+    (cfg_dir / "u.toml").write_text(
+        f'[universe]\nname = "u"\nsource = "test"\n'
+        f'universe_file = "{csv_path.as_posix()}"\n'
+        f'\n[prices]\noutput_dir = "{(tmp_path / "nonexistent").as_posix()}"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr("equity.data.registry.PROJECT_ROOT", tmp_path)
+
+    assert _resolve_prices_path_from_universe("u") is None
+
+
+def test_resolve_prices_path_returns_none_for_unknown_universe(tmp_path, monkeypatch):
+    """``_resolve_prices_path_from_universe`` returns None for an unknown
+    universe name (review round 2, suggestion #6)."""
+    from equity.diagnostics.published_at_guard import (
+        _resolve_prices_path_from_universe,
+    )
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+
+    assert _resolve_prices_path_from_universe("definitely_not_a_universe_xyz") is None
+
+
+def test_published_at_guard_cli_resolves_prices_from_toml(tmp_path):
+    """The one-arg CLI form (--joined without --prices) resolves prices from
+    the universe TOML ``[prices].output_dir`` and runs FK integrity (review
+    round 2, suggestion #6). Writes a temporary universe TOML under the real
+    ``configs/equity/`` (cleaned up in ``finally``) so the subprocess can find
+    it -- this is the only way to feed a custom universe to the CLI subprocess
+    (CONFIG_DIR is a module-level constant in the subprocess)."""
+    from equity.data.registry import PROJECT_ROOT
+
+    # Unique names so a parallel test run doesn't collide.
+    cfg_path = PROJECT_ROOT / "configs" / "equity" / "_test_fk_guard.toml"
+    csv_path = PROJECT_ROOT / "configs" / "equity" / "_test_fk_guard.csv"
+    prices_path = tmp_path / "prices.parquet"
+    joined_path = tmp_path / "joined.parquet"
+    out_path = tmp_path / "result.json"
+
+    # Build a valid prices frame + a joined frame with valid FK.
+    prices = _build_synthetic_prices()
+    prices.to_parquet(prices_path, index=False)
+    joined = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "period_close_ts": pd.to_datetime(["2024-07-01 20:00"], utc=True),
+            "published_at": pd.to_datetime(["2024-07-01T14:30:00+00:00"], utc=True),
+            "text": ["x"],
+            "source": ["r"],
+        }
+    )
+    joined.to_parquet(joined_path, index=False)
+
+    try:
+        csv_path.write_text(
+            "ticker,listed_at,delisted_at,name\nAAPL,,,Apple\n", encoding="utf-8"
+        )
+        cfg_path.write_text(
+            f'[universe]\nname = "_test_fk_guard"\nsource = "test"\n'
+            f'universe_file = "{csv_path.as_posix()}"\n'
+            f'\n[prices]\noutput_dir = "{prices_path.as_posix()}"\n',
+            encoding="utf-8",
+        )
+
+        proc = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "equity.diagnostics.published_at_guard",
+                "--joined",
+                str(joined_path),
+                "--universe",
+                "_test_fk_guard",
+                "--output",
+                str(out_path),
+            ],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, (
+            f"expected exit 0, got {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+        )
+        assert out_path.exists()
+        import json
+
+        payload = json.loads(out_path.read_text())
+        assert payload["fk_checked"] is True, (
+            "FK check should have run (prices resolved from TOML); "
+            f"got fk_checked={payload.get('fk_checked')}, payload={payload}"
+        )
+    finally:
+        if cfg_path.exists():
+            cfg_path.unlink()
+        if csv_path.exists():
+            csv_path.unlink()
+
+
+def test_published_at_guard_cli_warns_when_prices_unresolvable(tmp_path):
+    """When --joined is given without --prices AND the universe TOML can't
+    resolve a prices store (unknown universe), the CLI warns and runs PIT-only
+    (fk_checked=False, exit 0 on a clean joined frame) -- review round 2,
+    suggestion #6: don't hard-fail."""
+    joined_path = tmp_path / "joined_clean.parquet"
+    joined = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "period_close_ts": pd.to_datetime(["2024-07-01 20:00"], utc=True),
+            "published_at": pd.to_datetime(["2024-07-01T14:30:00+00:00"], utc=True),
+            "text": ["x"],
+            "source": ["r"],
+        }
+    )
+    joined.to_parquet(joined_path, index=False)
+    out_path = tmp_path / "result.json"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "equity.diagnostics.published_at_guard",
+            "--joined",
+            str(joined_path),
+            "--universe",
+            "definitely_not_a_universe_xyz",
+            "--output",
+            str(out_path),
+        ],
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    # Clean joined frame -> exit 0 (PIT passes, FK skipped with a warning).
+    assert proc.returncode == 0, (
+        f"expected exit 0 (clean joined, FK skipped), got {proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}"
+    )
+    assert out_path.exists()
+    import json
+
+    payload = json.loads(out_path.read_text())
+    assert payload["fk_checked"] is False, (
+        "FK check should have been skipped (unresolvable prices); "
+        f"got fk_checked={payload.get('fk_checked')}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# In-process main() tests (covers the CLI entry point for coverage; the
+# subprocess-based tests above exercise the same paths but coverage does not
+# track child processes).
+# ---------------------------------------------------------------------------
+
+
+def test_main_in_process_fk_violation_populates_violations_consistently(
+    tmp_path, monkeypatch
+):
+    """main() in-process: --joined with a phantom key + --prices -> exit 1.
+    Review round 2, issue #2: the except block populates ``violations`` with a
+    synthetic ``fk_error`` entry (NOT empty) so the result schema is consistent
+    across both the normal path and the except path."""
+    from equity.diagnostics.published_at_guard import main
+
+    prices = _build_synthetic_prices()
+    prices_path = tmp_path / "prices.parquet"
+    prices.to_parquet(prices_path, index=False)
+    # Joined frame references a session NOT in prices (phantom FK).
+    joined = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "period_close_ts": pd.to_datetime(["2024-07-15 20:00"], utc=True),
+            "published_at": pd.to_datetime(["2024-07-01T10:00:00+00:00"], utc=True),
+            "text": ["phantom"],
+            "source": ["r"],
+        }
+    )
+    joined_path = tmp_path / "joined_phantom.parquet"
+    joined.to_parquet(joined_path, index=False)
+    out_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "published_at_guard",
+            "--joined",
+            str(joined_path),
+            "--prices",
+            str(prices_path),
+            "--output",
+            str(out_path),
+        ],
+    )
+    rc = main()
+    assert rc == 1, f"expected exit 1 on FK violation, got {rc}"
+    assert out_path.exists()
+    import json
+
+    payload = json.loads(out_path.read_text())
+    assert payload["pass"] is False
+    # Issue #2: violations is NOT empty -- a synthetic fk_error entry is
+    # populated so the schema is consistent across both result paths.
+    assert payload["n_violations"] == len(payload["violations"]) == 1
+    assert payload["violations"][0]["type"] == "fk_error"
+    assert payload["fk_checked"] is True
+
+
+def test_main_in_process_clean_joined_exits_zero(tmp_path, monkeypatch):
+    """main() in-process: --joined with a clean frame + --prices -> exit 0,
+    fk_checked=True (FK integrity ran)."""
+    from equity.diagnostics.published_at_guard import main
+
+    prices = _build_synthetic_prices()
+    prices_path = tmp_path / "prices.parquet"
+    prices.to_parquet(prices_path, index=False)
+    joined = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "period_close_ts": pd.to_datetime(["2024-07-01 20:00"], utc=True),
+            "published_at": pd.to_datetime(["2024-07-01T14:30:00+00:00"], utc=True),
+            "text": ["x"],
+            "source": ["r"],
+        }
+    )
+    joined_path = tmp_path / "joined_clean.parquet"
+    joined.to_parquet(joined_path, index=False)
+    out_path = tmp_path / "result.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "published_at_guard",
+            "--joined",
+            str(joined_path),
+            "--prices",
+            str(prices_path),
+            "--output",
+            str(out_path),
+        ],
+    )
+    rc = main()
+    assert rc == 0, f"expected exit 0 on clean joined, got {rc}"
+    assert out_path.exists()
+    import json
+
+    payload = json.loads(out_path.read_text())
+    assert payload["pass"] is True
+    assert payload["fk_checked"] is True
+    assert payload["n_violations"] == 0
+
+
+def test_main_in_process_resolves_prices_from_universe_toml(
+    tmp_path, monkeypatch
+):
+    """main() in-process: --joined without --prices resolves prices from the
+    universe TOML [prices].output_dir and runs FK (review round 2, #6)."""
+    from equity.diagnostics.published_at_guard import main
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    prices_path = tmp_path / "prices.parquet"
+    joined_path = tmp_path / "joined.parquet"
+    out_path = tmp_path / "result.json"
+    csv_path = tmp_path / "u.csv"
+    csv_path.write_text(
+        "ticker,listed_at,delisted_at,name\nAAPL,,,Apple\n", encoding="utf-8"
+    )
+    (cfg_dir / "u.toml").write_text(
+        f'[universe]\nname = "u"\nsource = "test"\n'
+        f'universe_file = "{csv_path.as_posix()}"\n'
+        f'\n[prices]\noutput_dir = "{prices_path.as_posix()}"\n',
+        encoding="utf-8",
+    )
+    prices = _build_synthetic_prices()
+    prices.to_parquet(prices_path, index=False)
+    joined = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "period_close_ts": pd.to_datetime(["2024-07-01 20:00"], utc=True),
+            "published_at": pd.to_datetime(["2024-07-01T14:30:00+00:00"], utc=True),
+            "text": ["x"],
+            "source": ["r"],
+        }
+    )
+    joined.to_parquet(joined_path, index=False)
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr("equity.data.registry.PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "published_at_guard",
+            "--joined",
+            str(joined_path),
+            "--universe",
+            "u",
+            "--output",
+            str(out_path),
+        ],
+    )
+    rc = main()
+    assert rc == 0, f"expected exit 0, got {rc}"
+    assert out_path.exists()
+    import json
+
+    payload = json.loads(out_path.read_text())
+    assert payload["fk_checked"] is True, (
+        f"FK should have run (prices resolved from TOML); got {payload}"
+    )
 
