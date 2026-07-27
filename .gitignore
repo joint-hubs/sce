@@ -74,6 +74,9 @@ scripts/tmp_*.ps1
 # Equity OHLCV parquet stores (regenerated; S1.2 fetch_prices output)
 data/equity/
 
+# Sentiment per-article score cache (regenerated; S2.2 SentimentCache output)
+.cache/sentiment/
+
 # Results (regenerated)
 results/
 # GCP overnight-batch run artefacts unpacked into the repo root (not citable)

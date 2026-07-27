@@ -30,3 +30,20 @@ output_dir = "data/equity/articles"
 partition_cols = ["year", "month"]
 source = "seed"
 seed_file = "configs/equity/articles_seed.csv"
+
+# S2: sentiment scoring + time-decayed per-(ticker, period) aggregation.
+# ``EquityDataLoader`` does NOT consume this section directly -- the S2
+# sentiment pipeline (equity.sentiment) reads it for the active scorer /
+# cache directory / halflife. ``scorer`` is the default scorer name and is
+# overridable at boot via the ``SENTIMENT_SCORER`` env var (see
+# ``equity.sentiment.get_scorer``). ``model_revision`` is part of the
+# per-article cache key, so bumping it invalidates cached scores cleanly.
+[sentiment]
+model_name = "ProsusAI/finbert"
+# TODO(FOC-49): pin to a specific commit SHA after auditing the ProsusAI/finbert
+# history, so cached scores are reproducible against an immutable snapshot.
+model_revision = "main"
+batch_size = 8
+halflife_days = 5
+cache_dir = ".cache/sentiment"
+scorer = "finbert"
