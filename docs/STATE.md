@@ -1,7 +1,59 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-06-12** (overnight run results)
+> Last update: **2026-07-27** (FOC-48 slice S1 — equity data-acquisition package, on review branch)
+
+## Equity forecasting pipeline (FOC-47/48) — branch `foc-48-s1-data-acquisition`
+
+**Status (2026-07-27):** Slice S1 (Data acquisition + canonical schema) IMPLEMENTED
+on feature branch `foc-48-s1-data-acquisition` (NOT merged to main; in Linear
+review). 3 commits: `61c39db` (S1.1), `fa9351b` (S1.2), `70824f2` (S1.3).
+
+New sibling package `equity/` (independent of `sce/`, mirrors `sce/io` registry
+pattern; NOT imported into `sce/`):
+- `equity/data/loader.py` — `EquityDataLoader(universe, start, end, period="1d",
+  tickers=None)`; `.universe()` (delisting-aware `(ticker, listed_at,
+  delisted_at)` tuples); `.fetch_prices()` (yfinance OHLCV → Hive-partitioned
+  `prices.parquet`, cols `ticker,period_close_ts,open,high,low,close,adj_close,
+  volume,vwap`); `.fetch_articles()` (seed → `articles.parquet`);
+  `.join_articles_to_prices()` (point-in-time join via XNYS calendar; rule
+  `period_close(P-1) < published_at <= period_close(P)` + holiday roll-forward).
+- `equity/data/schema.py` — pandera `prices_schema` (tz-aware
+  `America/New_York`) + `articles_schema` (tz-aware UTC) + `validate_*` +
+  PK-uniqueness helpers. **First pandera use + first tz-aware code in repo.**
+- `equity/data/fetch.py` — `fetch_yfinance_ohlcv` (in-process, no subprocess;
+  VWAP proxy `(h+l+c)/3`) + `fetch_articles_from_seed`.
+- `equity/data/registry.py` — `UniverseInfo` + `list_universes()`/
+  `get_universe_info()` (globs `configs/equity/*.toml`).
+- `equity/diagnostics/published_at_guard.py` — CLI
+  `python -m equity.diagnostics.published_at_guard`; **exits non-zero on
+  PIT-join violation** (first non-zero-exit diagnostic in repo).
+- Configs: `configs/equity/sp500.toml` (`[universe]`/`[prices]`/`[articles]`);
+  `sp500_universe.csv` seed (20 current + 13 verified delisted S&P 500 tickers
+  with public-record delist dates); `articles_seed.csv`.
+- `pyproject.toml`: new `[equity]` extra (yfinance, pandas_market_calendars,
+  pandera); `packages.find` extended to `["sce*", "equity*"]`; `all` aggregator
+  extended; `equity.__version__ = 0.3.0`.
+
+**Tests:** `tests/equity/` — 37 passed + 2 skipped (live yfinance + Kaggle
+integration tests gated by `SCE_EQUITY_LIVE_TEST=1`; no network on default run).
+Regression on `sce` (io + models): green.
+
+**Decisions locked (GATE 1, PRD `docs/plan/2026-07-27_trading_forecaster_prd.md`):**
+Q1 S&P 500 · Q2 `ret_1d` SCE target · Q3 free RSS first · Q4 interaction
+allow-list (ADR in S4) · Q5 horizons `{1,5,10,21,63}` · Q6 5y/63d/63d
+walk-forward · Q7 quantile heads.
+
+**Assumptions to confirm in review:** (1) reference delisted-tickers = committed
+seed CSV (full historical-constituents Kaggle dataset deferred to S1.2 follow-up,
+seed swappable via TOML `universe_file`); (2) `published_at` canonical tz = UTC;
+(3) Cam Nugent Kaggle slug `camnugent/sandp500`; (4) ticker-alias mapping (e.g.
+`ENRN`→`ENE`) not implemented — S1.3 filters out-of-window tickers; (5) `equity/`
+sibling package does not touch `stat-context` core deps or `import sce`.
+
+**Next (after review/merge):** S2 (FinBERT sentiment + per-period aggregation)
+→ S3 (lag-aware features) → S4 (SCE equity enrichment). Subtask plan:
+`docs/plan/2026-07-27_trading_forecaster_subtasks.md`.
 
 ## Where we are
 
