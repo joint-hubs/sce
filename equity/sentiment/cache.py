@@ -57,7 +57,6 @@ from equity.data.registry import PROJECT_ROOT
 from equity.sentiment.base import SentimentScorer
 from equity.sentiment.schema import (
     CANONICAL_PER_ARTICLE_COLUMNS,
-    SENTIMENT_TZ,
     assert_per_article_primary_key_unique,
     validate_sentiment_per_article,
 )
@@ -143,7 +142,7 @@ def _write_meta(
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(meta, indent=2, sort_keys=True))
-        os.chmod(tmp_name, 0o644)
+        os.chmod(tmp_name, 0o600)
         os.replace(tmp_name, meta_path)
     except Exception:
         try:
@@ -155,12 +154,17 @@ def _write_meta(
 
 
 def _articles_content_hash(articles: pd.DataFrame) -> str:
-    """Return a deterministic sha256 over the articles frame (columns sorted,
-    rows sorted) so two runs over the same articles yield the same hash.
-    Mirrors S1's ``_store_content_hash``.
+    """Return a deterministic sha256 over the canonical score-result frame
+    (``article_key + model_name + model_revision + pos + neg + neu + score``,
+    columns sorted, rows sorted) so two runs over the same articles yield
+    the same hash. Mirrors S1's ``_store_content_hash``.
+
+    Hashing the FULL score state (not just ``article_key + ticker +
+    published_at``) means a corrupted probability column or a stale
+    ``model_revision`` is detected as content drift (FOC-49 L8).
     """
-    cols = list(articles.columns)
-    sorted_df = articles.sort_values(cols).reset_index(drop=True)
+    cols = [c for c in CANONICAL_PER_ARTICLE_COLUMNS if c in articles.columns]
+    sorted_df = articles[cols].sort_values(cols).reset_index(drop=True)
     payload = sorted_df.to_json(orient="records", date_format="iso")
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -175,6 +179,17 @@ class SentimentCache:
         Relative paths are joined to ``PROJECT_ROOT``; absolute paths must
         live under ``PROJECT_ROOT`` (containment guard). Defaults to
         ``.cache/sentiment``.
+
+    Concurrency
+    -----------
+    The cache is NOT thread-safe and NOT process-safe. It assumes a
+    single-process, single-thread access pattern. There is no lock around
+    ``os.replace`` -- a concurrent miss in two processes would score the
+    same articles twice and the second writer's ``os.replace`` would
+    silently lose the first writer's union rows (the union is rebuilt from
+    the on-disk cache + this batch's input, so rows from the OTHER process's
+    concurrent batch are dropped). If you need multi-process safety, wrap
+    access in an external lock or run a single scorer process.
     """
 
     def __init__(self, cache_dir: str | Path | None = None) -> None:
@@ -206,7 +221,9 @@ class SentimentCache:
         os.close(fd)
         try:
             validated.to_parquet(tmp_name, index=False)
-            os.chmod(tmp_name, 0o644)
+            # 0o600: owner-only read/write (POSIX). No-op on Windows; safer
+            # than world-readable 0o644 on shared POSIX hosts.
+            os.chmod(tmp_name, 0o600)
             os.replace(tmp_name, self.cache_path)
         except Exception:
             try:
@@ -220,9 +237,7 @@ class SentimentCache:
             model_revision=scorer.model_revision,
             scorer_class=type(scorer).__name__,
             n_articles=int(len(validated)),
-            content_hash=_articles_content_hash(
-                validated[["article_key", "ticker", "published_at"]]
-            ),
+            content_hash=_articles_content_hash(validated),
         )
 
     # -- Public API -------------------------------------------------------
@@ -244,6 +259,19 @@ class SentimentCache:
         model + revision makes ZERO model forward passes (asserted in
         :mod:`tests.equity.test_sentiment_cache`).
 
+        Pass-through contract (FOC-49 B1/B2)
+        --------------------------------------
+        The cache parquet stores ONLY the score-result surface (see
+        :data:`CANONICAL_PER_ARTICLE_COLUMNS`): ``article_key, model_name,
+        model_revision, pos, neg, neu, score``. The returned DataFrame is
+        the score-result surface JOINED with ALL input columns EXCEPT
+        ``text_col`` (so ``ticker``, ``published_at``, ``period_close_ts``,
+        ``source`` etc. are passed through from the CURRENT input, never
+        from the cache). This eliminates ticker drift on warm-path cache
+        hits (the same text re-scored under a different ticker returns the
+        new ticker from the input) and surfaces ``period_close_ts`` to
+        downstream aggregation when the input carries it.
+
         Parameters
         ----------
         articles:
@@ -259,38 +287,39 @@ class SentimentCache:
         Returns
         -------
         pd.DataFrame
-            Canonical per-article frame (see
-            :data:`CANONICAL_PER_ARTICLE_COLUMNS`), validated against
-            :data:`sentiment_per_article_schema`. Includes ALL cached rows
-            for the input articles, not just newly-scored ones.
+            Score-result columns (see
+            :data:`CANONICAL_PER_ARTICLE_COLUMNS`) concatenated with ALL
+            input columns except ``text_col`` (pass-through from the
+            current input). Includes ALL cached rows for the input
+            articles, not just newly-scored ones.
         """
         if text_col not in articles.columns:
             raise ValueError(f"articles frame missing required column '{text_col}'.")
         if ticker_col not in articles.columns:
             raise ValueError(f"articles frame missing required column '{ticker_col}'.")
         if published_at_col not in articles.columns:
-            raise ValueError(f"articles frame missing required column " f"'{published_at_col}'.")
+            raise ValueError(f"articles frame missing required column '{published_at_col}'.")
 
         model_name = scorer.model_name
         model_revision = scorer.model_revision
 
-        # Build article_key for every input article.
+        # Build article_key for every input article. NOTE: an empty/null
+        # text collapses to a single cache entry (""); this is INTENDED --
+        # the cache keys on (text + model_name + model_revision), and two
+        # empty-text articles are indistinguishable to the scorer. Callers
+        # should filter null/empty text upstream if they want per-row
+        # scores for distinct articles with missing text.
         keys = [
-            compute_article_key(str(t) if t is not None else "", model_name, model_revision)
+            compute_article_key(
+                str(t) if pd.notna(t) and t is not None else "", model_name, model_revision
+            )
             for t in articles[text_col].tolist()
         ]
 
-        # Normalize published_at to UTC tz-aware (matches S1 articles_joined
-        # convention). ``articles.parquet`` published_at is already UTC, but
-        # be defensive: convert tz-aware series, localize tz-naive series.
-        pub = pd.to_datetime(articles[published_at_col], utc=True)
-        pub = pub.astype(pd.DatetimeTZDtype(tz=SENTIMENT_TZ))
-
-        input_frame = pd.DataFrame(
+        # Build the score-result frame (cache-internal canonical surface).
+        score_frame = pd.DataFrame(
             {
                 "article_key": keys,
-                "ticker": articles[ticker_col].astype(object),
-                "published_at": pub,
                 "model_name": model_name,
                 "model_revision": model_revision,
                 # placeholder -- filled below
@@ -316,7 +345,7 @@ class SentimentCache:
         # Determine which keys need scoring.
         missing_idx = [i for i, k in enumerate(keys) if k not in cached_by_key]
 
-        n_cache_hits = len(input_frame) - len(missing_idx)
+        n_cache_hits = len(score_frame) - len(missing_idx)
         log.info(
             "SentimentCache: %d cache hit(s), %d miss(es) -> scorer.",
             n_cache_hits,
@@ -344,15 +373,11 @@ class SentimentCache:
                     "score": float(s["score"]),
                 }
 
-        # Materialize the final frame in input order.
-        pos = [cached_by_key[k]["pos"] for k in keys]
-        neg = [cached_by_key[k]["neg"] for k in keys]
-        neu = [cached_by_key[k]["neu"] for k in keys]
-        score = [cached_by_key[k]["score"] for k in keys]
-        input_frame["pos"] = pos
-        input_frame["neg"] = neg
-        input_frame["neu"] = neu
-        input_frame["score"] = score
+        # Materialize the score columns in input order.
+        score_frame["pos"] = [cached_by_key[k]["pos"] for k in keys]
+        score_frame["neg"] = [cached_by_key[k]["neg"] for k in keys]
+        score_frame["neu"] = [cached_by_key[k]["neu"] for k in keys]
+        score_frame["score"] = [cached_by_key[k]["score"] for k in keys]
 
         # Write the union back to the cache ONLY if there were misses. When
         # every key was a cache hit, the existing cache is already correct
@@ -369,8 +394,6 @@ class SentimentCache:
                         out_rows.append(
                             {
                                 "article_key": row.article_key,
-                                "ticker": row.ticker,
-                                "published_at": pd.Timestamp(row.published_at),
                                 "model_name": row.model_name,
                                 "model_revision": row.model_revision,
                                 "pos": float(row.pos),
@@ -380,12 +403,10 @@ class SentimentCache:
                             }
                         )
             # Current input rows (newly scored or cache-hit).
-            for row in input_frame.itertuples(index=False):
+            for row in score_frame.itertuples(index=False):
                 out_rows.append(
                     {
                         "article_key": row.article_key,
-                        "ticker": row.ticker,
-                        "published_at": pd.Timestamp(row.published_at),
                         "model_name": row.model_name,
                         "model_revision": row.model_revision,
                         "pos": float(row.pos),
@@ -397,7 +418,14 @@ class SentimentCache:
             union = pd.DataFrame(out_rows, columns=CANONICAL_PER_ARTICLE_COLUMNS)
             self._write_cache(union, scorer)
 
-        return validate_sentiment_per_article(input_frame)
+        # Build the returned frame: score cols + passthrough input cols
+        # (all input cols except text_col). Score cols override on collision.
+        passthrough = articles.drop(columns=[text_col]).reset_index(drop=True)
+        overlap = [c for c in passthrough.columns if c in CANONICAL_PER_ARTICLE_COLUMNS]
+        if overlap:
+            passthrough = passthrough.drop(columns=overlap)
+        out = pd.concat([score_frame.reset_index(drop=True), passthrough], axis=1)
+        return out
 
     def get_meta(self) -> dict[str, Any] | None:
         """Return the parsed ``_meta.json`` (or ``None`` if missing)."""

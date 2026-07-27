@@ -32,7 +32,7 @@ def _hf_available() -> bool:
 def test_finbert_default_metadata():
     s = FinBERTScorer()
     assert s.model_name == "ProsusAI/finbert"
-    assert s.model_revision == "main"
+    assert s.model_revision == "4556d13015211d73dccd3fdd39d39232506f3e43"
     assert s.batch_size == 8
 
 

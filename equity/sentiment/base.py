@@ -117,6 +117,25 @@ def get_scorer(name: str | None = None) -> SentimentScorer:
     ------
     ValueError
         If ``name`` (or the env var) is not ``"finbert"`` or ``"vader"``.
+
+    Fallback semantics (FOC-49 Q1)
+    -------------------------------
+    The FinBERT -> VADER fallback is MANUAL, NOT automatic. There is no
+    ``except ImportError: return VADERScorer()`` branch -- by design.
+
+    - When the ``transformers`` extra is NOT installed, :class:`FinBERTScorer`
+      raises ``ImportError`` on the first ``classify`` / ``classify_batch``
+      call (the pipeline is lazy-loaded; see :mod:`equity.sentiment.finbert`).
+      The pipeline fails LOUDLY rather than silently degrading to VADER.
+    - To use VADER instead, set ``SENTIMENT_SCORER=vader`` in the
+      environment, or call ``get_scorer("vader")`` explicitly. Paper-trading
+      and any other latency-constrained or offline scenario selects VADER
+      explicitly; production FinBERT runs are expected to have the
+      ``[sentiment]`` extra installed and the model cache warm.
+    - Rationale: an automatic ImportError fallback would mask a missing-deps
+      bug as a silent quality regression (FinBERT -> VADER is a measurable
+      accuracy drop on financial text). A loud failure forces the operator
+      to choose the fallback deliberately.
     """
     resolved = name or os.environ.get("SENTIMENT_SCORER") or "finbert"
     resolved = resolved.strip().lower()

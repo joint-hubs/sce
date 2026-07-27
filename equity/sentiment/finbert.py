@@ -25,19 +25,27 @@ this.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from equity.sentiment.base import SentimentScore, make_score
 
-# Default HF model + revision. ``revision="main"`` is the moving default; a
-# TODO below marks the recommended pin. The revision is part of the cache
-# key, so bumping it (e.g. to a specific commit SHA after a model audit)
-# invalidates cached scores cleanly.
+# Default HF model + revision. ``_DEFAULT_REVISION`` is pinned to an audited
+# commit SHA (ProsusAI/finbert @ 4556d13015211d73dccd3fdd39d39232506f3e43,
+# 2023-05-23 -- the latest stable commit on the ``main`` ref as of the
+# FOC-49 audit). Pinning to an immutable SHA (rather than the moving
+# ``main`` ref) makes cached scores reproducible: a future force-push to
+# ``main`` cannot silently change the model weights under the cache. The
+# revision is part of the cache key (see :mod:`equity.sentiment.cache`), so
+# bumping it (e.g. to a newer SHA after a re-audit) invalidates cached
+# scores cleanly.
 _DEFAULT_MODEL = "ProsusAI/finbert"
-_DEFAULT_REVISION = "main"
-# TODO(FOC-49): pin ``_DEFAULT_REVISION`` to a specific commit SHA after
-# auditing the ProsusAI/finbert history, so cached scores are reproducible
-# against an immutable model snapshot rather than the moving ``main`` ref.
+_DEFAULT_REVISION = "4556d13015211d73dccd3fdd39d39232506f3e43"
+
+# Refuse to send an implicit authorization token to HF Hub on every model
+# fetch (defensive -- the cache key already pins the revision, so anonymous
+# reads are sufficient). ``setdefault`` honors an explicit user override.
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
 
 
 class FinBERTScorer:
@@ -56,8 +64,10 @@ class FinBERTScorer:
         lets the pipeline pick (CPU on a CPU-only box). Do NOT force CUDA --
         CPU torch is fine for the seed workload.
     revision:
-        HF revision (commit SHA or branch). Default ``"main"``; see
-        :data:`_DEFAULT_REVISION` TODO. The revision is exposed via
+        HF revision (commit SHA or branch). Default is the pinned audited
+        SHA :data:`_DEFAULT_REVISION`; passing a different value (e.g.
+        ``"main"`` to track the moving ref, or another SHA after a re-audit)
+        is supported. The revision is exposed via
         :attr:`model_revision` and used in the cache key.
     """
 
@@ -113,7 +123,13 @@ class FinBERTScorer:
             ) from exc
         tokenizer = AutoTokenizer.from_pretrained(self._model_name, revision=self._revision)
         model = AutoModelForSequenceClassification.from_pretrained(
-            self._model_name, revision=self._revision
+            # use_safetensors=True: prefer the safetensors checkpoint when
+            # available (no arbitrary-code-execution risk via pickle, and
+            # faster load). The ProsusAI/finbert repo ships both .bin and
+            # .safetensors at the pinned revision.
+            self._model_name,
+            revision=self._revision,
+            use_safetensors=True,
         )
         self._pipeline = pipeline(
             "sentiment-analysis",
@@ -121,7 +137,8 @@ class FinBERTScorer:
             tokenizer=tokenizer,
             device=self._device,
             top_k=3,  # return all 3 logits (positive, negative, neutral)
-            return_all_scores=False,
+            # NOTE: ``return_all_scores`` was removed in transformers>=4.30
+            # (deprecated in favor of ``top_k``). Do NOT re-add it.
         )
         return self._pipeline
 

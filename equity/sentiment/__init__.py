@@ -34,10 +34,11 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
     if name in (
         "aggregate_per_period",
         "aggregate_market_wide",
+        "aggregate_from_joined",
         "build_market_wide_per_article",
         "write_sentiment_per_period",
         "write_market_wide",
-        "DEFAULT_HALFLIFE_DAYS",
+        "DEFAULT_DECAY_TIME_CONST_DAYS",
     ):
         from equity.sentiment import aggregate
 
@@ -57,8 +58,9 @@ __all__ = [
     "compute_article_key",
     "aggregate_per_period",
     "aggregate_market_wide",
+    "aggregate_from_joined",
     "build_market_wide_per_article",
     "write_sentiment_per_period",
     "write_market_wide",
-    "DEFAULT_HALFLIFE_DAYS",
+    "DEFAULT_DECAY_TIME_CONST_DAYS",
 ]

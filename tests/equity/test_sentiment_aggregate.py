@@ -14,7 +14,7 @@ import pandas as pd
 import pytest
 
 from equity.sentiment.aggregate import (
-    DEFAULT_HALFLIFE_DAYS,
+    DEFAULT_DECAY_TIME_CONST_DAYS,
     aggregate_market_wide,
     aggregate_per_period,
     build_market_wide_per_article,
@@ -54,8 +54,10 @@ def _per_article_fixture() -> pd.DataFrame:
     )
 
 
-def _expected_weighted_mean(values: list[float], dts_days: list[float], halflife: float) -> float:
-    weights = [math.exp(-dt / halflife) for dt in dts_days]
+def _expected_weighted_mean(
+    values: list[float], dts_days: list[float], decay_time_const_days: float
+) -> float:
+    weights = [math.exp(-dt / decay_time_const_days) for dt in dts_days]
     num = sum(w * v for w, v in zip(weights, values))
     den = sum(weights)
     return num / den
@@ -63,24 +65,24 @@ def _expected_weighted_mean(values: list[float], dts_days: list[float], halflife
 
 def test_aggregate_per_period_formula_to_1e9():
     df = _per_article_fixture()
-    out = aggregate_per_period(df, halflife_days=DEFAULT_HALFLIFE_DAYS)
+    out = aggregate_per_period(df, decay_time_const_days=DEFAULT_DECAY_TIME_CONST_DAYS)
     assert len(out) == 1
     row = out.iloc[0]
     dts_days = [2.0 / 24.0, 8.0 / 24.0, 3.0 + 8.0 / 24.0]
     assert row["sentiment_score"] == pytest.approx(
-        _expected_weighted_mean([0.5, 0.2, 0.5], dts_days, DEFAULT_HALFLIFE_DAYS),
+        _expected_weighted_mean([0.5, 0.2, 0.5], dts_days, DEFAULT_DECAY_TIME_CONST_DAYS),
         abs=1e-9,
     )
     assert row["sentiment_pos"] == pytest.approx(
-        _expected_weighted_mean([0.7, 0.5, 0.6], dts_days, DEFAULT_HALFLIFE_DAYS),
+        _expected_weighted_mean([0.7, 0.5, 0.6], dts_days, DEFAULT_DECAY_TIME_CONST_DAYS),
         abs=1e-9,
     )
     assert row["sentiment_neg"] == pytest.approx(
-        _expected_weighted_mean([0.2, 0.3, 0.1], dts_days, DEFAULT_HALFLIFE_DAYS),
+        _expected_weighted_mean([0.2, 0.3, 0.1], dts_days, DEFAULT_DECAY_TIME_CONST_DAYS),
         abs=1e-9,
     )
     assert row["sentiment_neu"] == pytest.approx(
-        _expected_weighted_mean([0.1, 0.2, 0.3], dts_days, DEFAULT_HALFLIFE_DAYS),
+        _expected_weighted_mean([0.1, 0.2, 0.3], dts_days, DEFAULT_DECAY_TIME_CONST_DAYS),
         abs=1e-9,
     )
     assert row["n_articles"] == 3
@@ -201,12 +203,12 @@ def test_aggregate_market_wide_formula():
             "score": [0.5, 0.2],
         }
     )
-    out = aggregate_market_wide(df, halflife_days=DEFAULT_HALFLIFE_DAYS)
+    out = aggregate_market_wide(df, decay_time_const_days=DEFAULT_DECAY_TIME_CONST_DAYS)
     assert len(out) == 1
     row = out.iloc[0]
     dts_days = [2.0 / 24.0, 8.0 / 24.0]
     assert row["sentiment_score"] == pytest.approx(
-        _expected_weighted_mean([0.5, 0.2], dts_days, DEFAULT_HALFLIFE_DAYS),
+        _expected_weighted_mean([0.5, 0.2], dts_days, DEFAULT_DECAY_TIME_CONST_DAYS),
         abs=1e-9,
     )
     assert row["n_articles"] == 2
@@ -293,19 +295,82 @@ def test_build_market_wide_per_article_empty_input():
     assert "period_close_ts" in out.columns
 
 
-def test_aggregate_per_period_halflife_infinity_converges_to_simple_mean():
-    """As halflife -> inf, the weighted mean converges to the simple mean."""
+def test_aggregate_per_period_tau_infinity_converges_to_simple_mean():
+    """As decay_time_const_days -> inf, the weighted mean converges to the simple mean."""
     df = _per_article_fixture()
-    # Use a very large halflife (effectively uniform weights).
-    out_large = aggregate_per_period(df, halflife_days=1e6)
+    # Use a very large tau (effectively uniform weights).
+    out_large = aggregate_per_period(df, decay_time_const_days=1e6)
     simple_mean = df["score"].mean()
     assert out_large.iloc[0]["sentiment_score"] == pytest.approx(simple_mean, abs=1e-6)
 
 
-def test_aggregate_per_period_halflife_zero_raises():
+def test_aggregate_per_period_tau_zero_raises():
     df = _per_article_fixture()
-    with pytest.raises(ValueError, match="halflife_days must be > 0"):
-        aggregate_per_period(df, halflife_days=0)
+    with pytest.raises(ValueError, match="decay_time_const_days must be > 0"):
+        aggregate_per_period(df, decay_time_const_days=0)
+
+
+def test_aggregate_market_wide_empty_returns_empty_canonical():
+    out = aggregate_market_wide(
+        pd.DataFrame(columns=["published_at", "period_close_ts", "pos", "neg", "neu", "score"])
+    )
+    assert list(out.columns) == CANONICAL_MARKET_WIDE_COLUMNS
+    assert len(out) == 0
+
+
+def test_aggregate_market_wide_missing_columns_raises():
+    df = pd.DataFrame({"published_at": [], "pos": []})
+    with pytest.raises(ValueError, match="missing required columns"):
+        aggregate_market_wide(df)
+
+
+def test_aggregate_market_wide_tau_zero_raises():
+    period_close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "ticker": ["X"],
+            "published_at": [pd.Timestamp("2024-07-08 18:00", tz="UTC")],
+            "period_close_ts": [period_close],
+            "pos": [0.7],
+            "neg": [0.2],
+            "neu": [0.1],
+            "score": [0.5],
+        }
+    )
+    with pytest.raises(ValueError, match="decay_time_const_days must be > 0"):
+        aggregate_market_wide(df, decay_time_const_days=0)
+
+
+def test_aggregate_market_wide_drops_zero_weight_articles_from_n_articles():
+    """Q2: very-old articles (w ~= 0) are dropped from n_articles AND from
+    the weighted mean in the market-wide aggregate.
+    """
+    period_close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    # Article 1: recent (dt=2h, weight ~= exp(-2/24/5) = 0.983).
+    # Article 2: very old (dt=100000 days, weight ~= exp(-100000/5) ~= 0).
+    df = pd.DataFrame(
+        {
+            "ticker": ["A", "B"],
+            "published_at": [
+                pd.Timestamp("2024-07-08 18:00", tz="UTC"),
+                pd.Timestamp("2024-07-08 20:00", tz="UTC") - pd.Timedelta(days=100000),
+            ],
+            "period_close_ts": [period_close, period_close],
+            "pos": [0.7, 1.0],
+            "neg": [0.2, 0.0],
+            "neu": [0.1, 0.0],
+            "score": [0.5, 1.0],
+        }
+    )
+    out = aggregate_market_wide(df, decay_time_const_days=DEFAULT_DECAY_TIME_CONST_DAYS)
+    assert len(out) == 1
+    row = out.iloc[0]
+    # Only the recent article contributes -> n_articles=1, score=0.5.
+    assert row["n_articles"] == 1
+    assert row["sentiment_score"] == pytest.approx(0.5, abs=1e-9)
+    assert row["sentiment_pos"] == pytest.approx(0.7, abs=1e-9)
+    assert row["sentiment_neg"] == pytest.approx(0.2, abs=1e-9)
+    assert row["sentiment_neu"] == pytest.approx(0.1, abs=1e-9)
 
 
 def test_aggregate_per_period_missing_columns_raises():

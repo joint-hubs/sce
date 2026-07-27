@@ -168,7 +168,9 @@ def test_score_articles_warm_run_under_5pct_cold_latency(tmp_path, monkeypatch):
     warm = time.perf_counter() - t1
 
     assert scorer.batch_calls == 1, "warm run must not invoke the scorer"
-    assert warm < cold * 0.05, f"warm latency {warm*1e3:.3f}ms not < 5% of cold {cold*1e3:.3f}ms"
+    assert warm < cold * 0.05, (
+        f"warm latency {warm * 1e3:.3f}ms not < 5% of cold {cold * 1e3:.3f}ms"
+    )
 
 
 def test_score_articles_partial_cache_hit(tmp_path, monkeypatch):
@@ -339,3 +341,73 @@ def test_score_articles_empty_articles_returns_empty(tmp_path, monkeypatch):
     out = cache.score_articles(empty, scorer)
     assert len(out) == 0
     assert scorer.batch_calls == 0
+
+
+def test_score_articles_warm_path_corrects_ticker_from_input(tmp_path, monkeypatch):
+    """FOC-49 B2: the cache parquet stores NO ``ticker`` column; on a
+    warm-path cache hit the returned ticker comes from the CURRENT input,
+    not the stale cached value. This eliminates ticker drift when the same
+    text is re-scored under a different ticker.
+    """
+    monkeypatch.setattr("equity.sentiment.cache.PROJECT_ROOT", tmp_path)
+    cache = SentimentCache(cache_dir=str(tmp_path / "cache"))
+    scorer = _CountingStubScorer()
+
+    # Run 1: ticker=AAPL.
+    pub = pd.Timestamp("2024-07-01 12:00", tz="UTC")
+    articles_run1 = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "published_at": [pub],
+            "text": ["shared article text"],
+            "source": ["reuters"],
+        }
+    )
+    cache.score_articles(articles_run1, scorer)
+    assert scorer.batch_calls == 1
+
+    # Run 2: SAME text, DIFFERENT ticker (MSFT) -- all cache hit.
+    articles_run2 = pd.DataFrame(
+        {
+            "ticker": ["MSFT"],
+            "published_at": [pub],
+            "text": ["shared article text"],
+            "source": ["reuters"],
+        }
+    )
+    out = cache.score_articles(articles_run2, scorer)
+    # Warm path: zero forward passes.
+    assert scorer.batch_calls == 1, "warm run must not invoke the scorer"
+    # Returned frame carries the NEW ticker (MSFT) from the input, NOT the
+    # stale AAPL from the cache.
+    assert out.iloc[0]["ticker"] == "MSFT"
+    # The cache parquet stores NO ticker column at all.
+    cached_df = pd.read_parquet(tmp_path / "cache" / CACHE_FILE_NAME)
+    assert "ticker" not in cached_df.columns
+    # Score-result columns ARE present in the parquet.
+    for col in ("article_key", "model_name", "model_revision", "pos", "neg", "neu", "score"):
+        assert col in cached_df.columns
+
+
+def test_score_articles_passthrough_carries_period_close_ts(tmp_path, monkeypatch):
+    """FOC-49 B1: when the input carries ``period_close_ts`` (from
+    articles_joined.parquet), it is passed through to the returned frame
+    so downstream aggregation can group by period without an extra merge.
+    """
+    monkeypatch.setattr("equity.sentiment.cache.PROJECT_ROOT", tmp_path)
+    cache = SentimentCache(cache_dir=str(tmp_path / "cache"))
+    scorer = _CountingStubScorer()
+    pub = pd.Timestamp("2024-07-08 12:00", tz="UTC")
+    close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    articles = pd.DataFrame(
+        {
+            "ticker": ["AAPL"],
+            "published_at": [pub],
+            "period_close_ts": [close],
+            "text": ["article"],
+            "source": ["reuters"],
+        }
+    )
+    out = cache.score_articles(articles, scorer)
+    assert "period_close_ts" in out.columns
+    assert out.iloc[0]["period_close_ts"] == close

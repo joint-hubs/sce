@@ -27,12 +27,11 @@ from equity.sentiment.schema import (
 
 
 def _valid_per_article(n: int = 2) -> pd.DataFrame:
-    pub = pd.date_range("2024-07-01", periods=n, freq="h", tz="UTC")
+    # Cache-internal canonical frame: NO ticker / published_at (those are
+    # pass-through from the input at read time; see FOC-49 B2).
     return pd.DataFrame(
         {
             "article_key": [f"key{i}" for i in range(n)],
-            "ticker": ["AAPL"] * n,
-            "published_at": pub,
             "model_name": ["stub"] * n,
             "model_revision": ["v1"] * n,
             "pos": [0.5] * n,
@@ -84,8 +83,11 @@ def test_validate_per_article_passes_valid_frame():
 
 
 def test_validate_per_article_rejects_tz_naive_published_at():
+    # No published_at in the cache schema anymore (FOC-49 B2); this test
+    # now only confirms that adding an unexpected column is rejected by
+    # the strict schema.
     df = _valid_per_article()
-    df["published_at"] = df["published_at"].dt.tz_localize(None)
+    df["published_at"] = pd.to_datetime(pd.Series(["2024-07-01"] * len(df)), utc=True)
     with pytest.raises(Exception):
         validate_sentiment_per_article(df)
 
@@ -98,14 +100,9 @@ def test_validate_per_article_rejects_prob_sum_violation():
 
 
 def test_validate_per_article_empty_passes():
-    # Build the empty frame with the correct dtypes so pandera's strict
-    # dtype check passes (an object-dtype empty frame would fail the
-    # ``datetime64[ns, UTC]`` check on ``published_at``).
     empty = pd.DataFrame(
         {
             "article_key": pd.Series(dtype=str),
-            "ticker": pd.Series(dtype=str),
-            "published_at": pd.Series(dtype=pd.DatetimeTZDtype(tz="UTC")),
             "model_name": pd.Series(dtype=str),
             "model_revision": pd.Series(dtype=str),
             "pos": pd.Series(dtype=float),

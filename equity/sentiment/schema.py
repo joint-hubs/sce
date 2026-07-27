@@ -42,11 +42,18 @@ SENTIMENT_TZ = "UTC"
 # generous epsilon to absorb float arithmetic.
 _PROB_SUM_TOL = 1e-6
 
-# Canonical column order for the per-article score cache.
+# Canonical column order for the per-article score cache. NOTE: ``ticker``
+# and ``published_at`` are intentionally ABSENT -- they are pass-through from
+# the input articles frame at read time (see
+# :meth:`SentimentCache.score_articles`), so the cache parquet stores ONLY
+# the score-result surface (article_key + model metadata + probabilities +
+# score). This eliminates ticker drift on warm-path cache hits (FOC-49 B2):
+# the same text re-scored under a different ticker returns the new ticker
+# from the input, never the stale cached ticker. ``article_key`` already
+# hashes (text + model_name + model_revision), so the score-result is
+# reproducible from the cache alone.
 CANONICAL_PER_ARTICLE_COLUMNS: list[str] = [
     "article_key",
-    "ticker",
-    "published_at",
     "model_name",
     "model_revision",
     "pos",
@@ -104,14 +111,6 @@ def _assert_probs_sum_to_one(df: pd.DataFrame, pos: str, neg: str, neu: str) -> 
 sentiment_per_article_schema: pa.DataFrameSchema = pa.DataFrameSchema(
     {
         "article_key": pa.Column(str, coerce=True),
-        # ``ticker`` is nullable to accommodate market-wide / unresolved-ticker
-        # articles (e.g. the S1 ``__TEST_NOT_IN_UNIVERSE__`` sentinel) that
-        # are scored but never bound to a universe ticker.
-        "ticker": pa.Column(str, nullable=True, coerce=True),
-        "published_at": pa.Column(
-            pd.DatetimeTZDtype(tz=SENTIMENT_TZ),
-            coerce=False,
-        ),
         "model_name": pa.Column(str, coerce=True),
         "model_revision": pa.Column(str, coerce=True),
         "pos": pa.Column(float, coerce=True),
@@ -127,15 +126,14 @@ sentiment_per_article_schema: pa.DataFrameSchema = pa.DataFrameSchema(
 def validate_sentiment_per_article(df: pd.DataFrame) -> pd.DataFrame:
     """Validate a per-article sentiment frame against
     :data:`sentiment_per_article_schema` and the ``pos+neg+neu==1`` invariant.
+
+    This validates the CACHE-INTERNAL canonical frame (score-result surface
+    only, no ``ticker`` / ``published_at``). The frame returned to callers by
+    :meth:`SentimentCache.score_articles` carries additional pass-through
+    input columns and is NOT validated against this strict schema (callers
+    consume specific columns by name).
     """
     validated = sentiment_per_article_schema.validate(df)
-    if not validated.empty:
-        ts = validated["published_at"]
-        if ts.dt.tz is None:
-            raise ValueError(
-                f"published_at must be timezone-aware ({SENTIMENT_TZ}). "
-                "Received tz-naive timestamps; cache corruption likely."
-            )
     _assert_probs_sum_to_one(validated, "pos", "neg", "neu")
     return validated
 

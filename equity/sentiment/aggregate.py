@@ -1,8 +1,8 @@
 """
 @module: equity.sentiment.aggregate
 @depends: pandas, numpy, pandas_market_calendars
-@exports: aggregate_per_period, aggregate_market_wide, write_sentiment_per_period,
-          write_market_wide
+@exports: aggregate_per_period, aggregate_market_wide, aggregate_from_joined,
+          write_sentiment_per_period, write_market_wide
 @paper_ref: N/A
 @data_flow: per-article scores -> time-decayed per-(ticker,period) aggregate +
             market-wide aggregate
@@ -14,18 +14,26 @@ Formula
 For each trading period ``P`` and each article ``t`` published before
 ``period_close_P`` (point-in-time safe), the time-decayed weight is::
 
-    w_t = exp(-dt_t / halflife)
+    w_t = exp(-dt_t / tau)
 
 where ``dt_t = (period_close_P - published_at_t)`` converted to days and
-``halflife`` is :attr:`sentiment_halflife_days` (default 5). The aggregate
+``tau`` is :data:`DEFAULT_DECAY_TIME_CONST_DAYS` (default 5). The aggregate
 score for period ``P`` (and likewise ``pos_P``, ``neg_P``, ``neu_P``) is the
 weighted mean::
 
     sentiment_score_P = sum(w_t * score_t) / sum(w_t)
     n_articles_P      = count(t)
 
-A smaller ``halflife`` discounts older articles faster; ``halflife -> inf``
+A smaller ``tau`` discounts older articles faster; ``tau -> inf``
 converges to the simple mean.
+
+Note on the ``tau`` naming (FOC-49 M2)
+---------------------------------------
+The parameter was renamed from ``halflife_days`` to
+``decay_time_const_days`` for mathematical honesty: the formula
+``w = exp(-dt / tau)`` makes ``tau`` the EXPONENTIAL TIME CONSTANT (the
+``1/e`` folding time), NOT the halflife (``ln(2) * tau``). The numerical
+value (5) and the formula are UNCHANGED -- only the name was misleading.
 
 PIT safety
 ----------
@@ -66,7 +74,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -82,9 +90,16 @@ from equity.sentiment.schema import (
     validate_sentiment_per_period,
 )
 
+if TYPE_CHECKING:
+    from equity.sentiment.base import SentimentScorer
+    from equity.sentiment.cache import SentimentCache
+
 log = logging.getLogger(__name__)
 
-DEFAULT_HALFLIFE_DAYS = 5.0
+# Exponential time constant tau for ``w = exp(-dt / tau)`` (days). The
+# numerical value (5) and the formula are unchanged from S2.3; only the
+# name was corrected from the misleading ``halflife_days`` (FOC-49 M2).
+DEFAULT_DECAY_TIME_CONST_DAYS = 5.0
 
 
 def _build_xnys_schedule(start: pd.Timestamp, end: pd.Timestamp) -> pd.DatetimeIndex:
@@ -130,16 +145,20 @@ def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
 
 
 def _compute_weights(
-    period_close_utc: pd.Timestamp, published_at_utc: pd.Series, halflife_days: float
+    period_close_utc: pd.Timestamp,
+    published_at_utc: pd.Series,
+    decay_time_const_days: float,
 ) -> np.ndarray:
-    """Compute ``w_t = exp(-dt_t / halflife)`` where
-    ``dt_t = (period_close_P - published_at_t)`` in days.
+    """Compute ``w_t = exp(-dt_t / tau)`` where
+    ``dt_t = (period_close_P - published_at_t)`` in days and
+    ``tau = decay_time_const_days`` is the exponential time constant
+    (``1/e`` folding time, NOT the halflife which is ``ln(2)*tau``).
 
     All inputs are tz-aware UTC. Returns a float64 numpy array aligned with
     ``published_at_utc``.
     """
-    if halflife_days <= 0:
-        raise ValueError(f"halflife_days must be > 0 (got {halflife_days}).")
+    if decay_time_const_days <= 0:
+        raise ValueError(f"decay_time_const_days must be > 0 (got {decay_time_const_days}).")
     dt_seconds = (period_close_utc - published_at_utc).dt.total_seconds().to_numpy()
     # Negative dt would mean published_at > period_close (PIT violation).
     # The aggregator drops such rows upstream; assert here as defense.
@@ -149,33 +168,70 @@ def _compute_weights(
             "period_close_ts. The aggregator must drop these upstream."
         )
     dt_days = dt_seconds / 86400.0
-    return np.exp(-dt_days / float(halflife_days))
+    return np.exp(-dt_days / float(decay_time_const_days))
+
+
+def _aggregate_period_only(
+    group: pd.DataFrame,
+    period_close: pd.Timestamp,
+    decay_time_const_days: float,
+    *,
+    drop_zero_weight: bool = False,
+) -> dict[str, float | int]:
+    """Compute the weighted-mean aggregate for ONE period's group.
+
+    Shared by per-ticker aggregation (:func:`aggregate_per_period`) and
+    market-wide aggregation (:func:`aggregate_market_wide`). ``group`` must
+    contain ``published_at, pos, neg, neu, score``. ``period_close`` is
+    the group's ``period_close_ts`` (passed explicitly -- groupby.name is
+    unreliable across pandas versions). ``published_at`` must already be
+    tz-converted to :data:`SENTIMENT_TZ` by the caller.
+
+    When ``drop_zero_weight`` is True, rows whose weight rounds to ~0
+    (``w <= 1e-6``) are excluded from BOTH the weighted mean and the
+    ``n_articles`` count. Used by the market-wide aggregator (FOC-49 Q2):
+    very-old articles with ``w ~= 0`` would otherwise inflate
+    ``n_articles`` without contributing to the score, misrepresenting the
+    period's effective sample size.
+    """
+    weights = _compute_weights(period_close, group["published_at"], decay_time_const_days)
+    if drop_zero_weight:
+        mask = weights > 1e-6
+        n_articles = int(mask.sum())
+
+        def wm(values: np.ndarray) -> float:
+            return _weighted_mean(np.asarray(values)[mask], weights[mask])
+    else:
+        n_articles = int(len(group))
+
+        def wm(values: np.ndarray) -> float:
+            return _weighted_mean(np.asarray(values), weights)
+
+    return {
+        "sentiment_score": wm(group["score"].to_numpy()),
+        "sentiment_pos": wm(group["pos"].to_numpy()),
+        "sentiment_neg": wm(group["neg"].to_numpy()),
+        "sentiment_neu": wm(group["neu"].to_numpy()),
+        "n_articles": n_articles,
+    }
 
 
 def _aggregate_group(
-    group: pd.DataFrame, period_close: pd.Timestamp, halflife_days: float
+    group: pd.DataFrame, period_close: pd.Timestamp, decay_time_const_days: float
 ) -> dict[str, float | int]:
     """Compute the weighted-mean aggregate for one ``(ticker, period_close_ts)``
     group. ``group`` must contain ``published_at``, ``pos``, ``neg``,
     ``neu``, ``score`` columns. ``period_close`` is the group's
-    ``period_close_ts`` (passed explicitly to avoid relying on
-    ``DataFrame.name``, which is not available in pandas 2.x).
+    ``period_close_ts`` (passed explicitly -- the groupby ``name`` tuple is
+    unreliable to depend on across pandas versions, and ``DataFrame.name``
+    is not set on a plain DataFrame).
     """
-    # published_at is tz-aware UTC (validated upstream); convert to UTC for
-    # the dt computation.
-    pub = group["published_at"].dt.tz_convert(SENTIMENT_TZ)
-    weights = _compute_weights(period_close, pub, halflife_days)
-    return {
-        "sentiment_score": _weighted_mean(group["score"].to_numpy(), weights),
-        "sentiment_pos": _weighted_mean(group["pos"].to_numpy(), weights),
-        "sentiment_neg": _weighted_mean(group["neg"].to_numpy(), weights),
-        "sentiment_neu": _weighted_mean(group["neu"].to_numpy(), weights),
-        "n_articles": int(len(group)),
-    }
+    return _aggregate_period_only(group, period_close, decay_time_const_days)
 
 
 def aggregate_per_period(
-    per_article: pd.DataFrame, halflife_days: float = DEFAULT_HALFLIFE_DAYS
+    per_article: pd.DataFrame,
+    decay_time_const_days: float = DEFAULT_DECAY_TIME_CONST_DAYS,
 ) -> pd.DataFrame:
     """Compute the time-decayed per-(ticker, period_close_ts) aggregate.
 
@@ -190,8 +246,10 @@ def aggregate_per_period(
         ``period_close_ts`` column (the S1.3 join key from
         ``articles_joined.parquet``) -- if absent, the caller must merge it
         in (see :func:`aggregate_from_joined`).
-    halflife_days:
-        Time-decay halflife in days (default 5). ``w_t = exp(-dt / halflife)``.
+    decay_time_const_days:
+        Exponential time constant tau (days) for ``w_t = exp(-dt / tau)``.
+        Default 5. Note: this is the ``1/e`` folding time, NOT the halflife
+        (``ln(2) * tau``).
 
     Returns
     -------
@@ -220,8 +278,7 @@ def aggregate_per_period(
 
     if per_article["ticker"].isna().any():
         raise ValueError(
-            "per_article has null ticker values; route those rows to "
-            "aggregate_market_wide instead."
+            "per_article has null ticker values; route those rows to aggregate_market_wide instead."
         )
 
     df = per_article.copy()
@@ -238,8 +295,11 @@ def aggregate_per_period(
         )
 
     rows: list[dict[str, Any]] = []
+    # groupby yields the (ticker, period_close_ts) tuple as ``name``;
+    # period_close is already a tz-aware Timestamp here (the groupby key
+    # is a DatetimeTZDtype column), so no re-wrapping is needed.
     for (ticker, period_close), group in df.groupby(["ticker", "period_close_ts"], sort=True):
-        agg = _aggregate_group(group, pd.Timestamp(period_close), halflife_days)
+        agg = _aggregate_group(group, period_close, decay_time_const_days)
         rows.append(
             {
                 "ticker": ticker,
@@ -260,7 +320,8 @@ def aggregate_per_period(
 
 
 def aggregate_market_wide(
-    per_article: pd.DataFrame, halflife_days: float = DEFAULT_HALFLIFE_DAYS
+    per_article: pd.DataFrame,
+    decay_time_const_days: float = DEFAULT_DECAY_TIME_CONST_DAYS,
 ) -> pd.DataFrame:
     """Compute the time-decayed market-wide aggregate (no ticker col).
 
@@ -268,6 +329,12 @@ def aggregate_market_wide(
     :func:`build_market_wide_per_article`): one row per article, with
     ``period_close_ts`` already assigned via the XNYS calendar. ``ticker``
     is ignored (these are unresolved-ticker articles).
+
+    ``n_articles`` counts ONLY rows whose weight exceeds ``1e-6``
+    (FOC-49 Q2): very-old articles with ``w ~= 0`` do not contribute to
+    the weighted mean, so counting them in ``n_articles`` would overstate
+    the period's effective sample size. The score/pos/neg/neu columns are
+    likewise computed over only the contributing rows.
 
     Returns
     -------
@@ -294,18 +361,20 @@ def aggregate_market_wide(
         )
 
     rows: list[dict[str, Any]] = []
+    # groupby yields the period_close_ts Timestamp as ``name``; it is
+    # already tz-aware, so no re-wrapping via pd.Timestamp is needed.
     for period_close, group in df.groupby("period_close_ts", sort=True):
-        # Build a single-row "group" representation compatible with
-        # _aggregate_group (which expects a tuple name).
-        weights = _compute_weights(pd.Timestamp(period_close), group["published_at"], halflife_days)
+        agg = _aggregate_period_only(
+            group, period_close, decay_time_const_days, drop_zero_weight=True
+        )
         rows.append(
             {
                 "period_close_ts": period_close,
-                "sentiment_score": _weighted_mean(group["score"].to_numpy(), weights),
-                "sentiment_pos": _weighted_mean(group["pos"].to_numpy(), weights),
-                "sentiment_neg": _weighted_mean(group["neg"].to_numpy(), weights),
-                "sentiment_neu": _weighted_mean(group["neu"].to_numpy(), weights),
-                "n_articles": int(len(group)),
+                "sentiment_score": agg["sentiment_score"],
+                "sentiment_pos": agg["sentiment_pos"],
+                "sentiment_neg": agg["sentiment_neg"],
+                "sentiment_neu": agg["sentiment_neu"],
+                "n_articles": agg["n_articles"],
             }
         )
 
@@ -392,6 +461,62 @@ def build_market_wide_per_article(
 
 
 # ---------------------------------------------------------------------------
+# Glue: cache -> aggregate (FOC-49 B1)
+# ---------------------------------------------------------------------------
+
+
+def aggregate_from_joined(
+    articles_joined: pd.DataFrame,
+    cache: "SentimentCache",
+    scorer: "SentimentScorer",
+    *,
+    decay_time_const_days: float = DEFAULT_DECAY_TIME_CONST_DAYS,
+    text_col: str = "text",
+) -> pd.DataFrame:
+    """Score articles via the cache then aggregate per (ticker, period).
+
+    Glue function (FOC-49 B1): runs
+    :meth:`SentimentCache.score_articles` on ``articles_joined`` and feeds
+    the result (which carries pass-through ``ticker``, ``published_at``,
+    ``period_close_ts`` from the input) into :func:`aggregate_per_period`.
+
+    Parameters
+    ----------
+    articles_joined:
+        DataFrame with columns ``ticker, published_at (UTC tz-aware),
+        period_close_ts (UTC tz-aware, >= published_at), text, source``
+        (source optional). Typically the S1.3 ``articles_joined.parquet``.
+    cache:
+        A :class:`SentimentCache` (warmed or cold).
+    scorer:
+        A :class:`SentimentScorer`.
+    decay_time_const_days:
+        Exponential time constant tau (days) for the time decay.
+    text_col:
+        Column name holding the article text (default ``"text"``).
+
+    Returns
+    -------
+    pd.DataFrame
+        Per-(ticker, period) aggregate (same schema as
+        :func:`aggregate_per_period`).
+
+    Raises
+    ------
+    ValueError
+        If ``articles_joined`` lacks ``period_close_ts`` or the required
+        scoring columns, or if a PIT violation is detected downstream.
+    """
+    if "period_close_ts" not in articles_joined.columns:
+        raise ValueError(
+            "articles_joined missing required column 'period_close_ts'. "
+            "Use articles_joined.parquet (S1.3 join key), not raw articles.parquet."
+        )
+    per_article = cache.score_articles(articles_joined, scorer, text_col=text_col)
+    return aggregate_per_period(per_article, decay_time_const_days=decay_time_const_days)
+
+
+# ---------------------------------------------------------------------------
 # Writers
 # ---------------------------------------------------------------------------
 
@@ -439,9 +564,10 @@ def write_market_wide(market_wide: pd.DataFrame, out_path: str | Path) -> Path:
 
 
 __all__ = [
-    "DEFAULT_HALFLIFE_DAYS",
+    "DEFAULT_DECAY_TIME_CONST_DAYS",
     "aggregate_per_period",
     "aggregate_market_wide",
+    "aggregate_from_joined",
     "build_market_wide_per_article",
     "write_sentiment_per_period",
     "write_market_wide",

@@ -12,10 +12,12 @@ import subprocess
 import sys
 
 import pandas as pd
+import pytest
 
 from equity.diagnostics.sentiment_aggregate_guard import (
     run_sentiment_aggregate_guard,
 )
+from equity.sentiment.aggregate import aggregate_per_period
 
 
 def _valid_per_article() -> pd.DataFrame:
@@ -37,18 +39,10 @@ def _valid_per_article() -> pd.DataFrame:
 
 
 def _valid_per_period() -> pd.DataFrame:
-    period_close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
-    return pd.DataFrame(
-        {
-            "ticker": ["AAPL"],
-            "period_close_ts": [period_close],
-            "sentiment_score": [0.35],
-            "sentiment_pos": [0.6],
-            "sentiment_neg": [0.25],
-            "sentiment_neu": [0.15],
-            "n_articles": [2],
-        }
-    )
+    # Derive from the aggregator so the reproducibility invariant (M3) holds
+    # by construction -- the stored per_period matches a fresh re-derivation
+    # from per_article.
+    return aggregate_per_period(_valid_per_article())
 
 
 def test_guard_passes_on_valid_frames():
@@ -359,7 +353,7 @@ def test_guard_cli_main_in_process_fail(tmp_path, monkeypatch):
             str(pp_path),
             "--output",
             str(out_path),
-            "--halflife-days",
+            "--decay-time-const-days",
             "5.0",
         ],
     )
@@ -434,3 +428,71 @@ def test_guard_cli_main_in_process_default_output(tmp_path, monkeypatch):
     # One JSON file written under results_dir.
     jsons = list(results_dir.glob("sentiment_aggregate_guard_*.json"))
     assert len(jsons) == 1
+
+
+# ---------------------------------------------------------------------------
+# M3: aggregate reproducibility (5th invariant)
+# ---------------------------------------------------------------------------
+
+
+def test_guard_reproducibility_passes_on_consistent_frames():
+    """When per_period is a faithful re-derivation of per_article, the
+    reproducibility invariant passes.
+    """
+    result = run_sentiment_aggregate_guard(_valid_per_article(), _valid_per_period())
+    assert result["pass"] is True
+    assert not any(v["type"] == "aggregate_reproducibility" for v in result["violations"])
+
+
+def test_guard_reproducibility_detects_tampered_per_period():
+    """Manually editing per_period.sentiment_score breaks the
+    re-derivation -> the guard reports an aggregate_reproducibility
+    violation.
+    """
+    per_period = _valid_per_period().copy()
+    per_period.loc[0, "sentiment_score"] = per_period.loc[0, "sentiment_score"] + 0.1
+    result = run_sentiment_aggregate_guard(_valid_per_article(), per_period)
+    assert result["pass"] is False
+    repro = [v for v in result["violations"] if v["type"] == "aggregate_reproducibility"]
+    assert len(repro) == 1
+    assert repro[0]["ticker"] == "AAPL"
+
+
+def test_guard_reproducibility_detects_wrong_n_articles():
+    """Bumping per_period.n_articles without adding per_article rows is a
+    reproducibility violation.
+    """
+    per_period = _valid_per_period().copy()
+    per_period.loc[0, "n_articles"] = per_period.loc[0, "n_articles"] + 1
+    result = run_sentiment_aggregate_guard(_valid_per_article(), per_period)
+    repro = [v for v in result["violations"] if v["type"] == "aggregate_reproducibility"]
+    assert len(repro) == 1
+
+
+def test_guard_reproducibility_skipped_when_per_article_empty():
+    """When per_article is empty, the reproducibility check is skipped
+    (consistent with PIT/monotonicity skip-on-empty); the per_period
+    prob-sum check still runs and the result is pass.
+    """
+    result = run_sentiment_aggregate_guard(pd.DataFrame(), _valid_per_period())
+    assert result["pass"] is True
+    assert not any(v["type"] == "aggregate_reproducibility" for v in result["violations"])
+
+
+def test_guard_cli_rejects_output_outside_project_root():
+    """L9: ``--output`` with a ``..`` traversal component is refused."""
+    from equity.diagnostics import sentiment_aggregate_guard as guard
+
+    with pytest.raises(ValueError, match="path-traversal"):
+        guard._resolve_under_project_root("../../etc/evil.json")
+
+
+def test_guard_cli_accepts_absolute_output_path(tmp_path):
+    """L9: an absolute ``--output`` outside PROJECT_ROOT is honored -- a
+    diagnostic report is legitimately written to operator-chosen locations
+    (CI artifacts, tmp dirs)."""
+    from equity.diagnostics import sentiment_aggregate_guard as guard
+
+    out = tmp_path / "diagnostic.json"
+    resolved = guard._resolve_under_project_root(str(out))
+    assert resolved == out.resolve()
