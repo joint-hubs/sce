@@ -50,7 +50,7 @@ def test_universe_has_at_least_ten_delistees_with_nonnull_delisted_at():
     # Wide window so every delisted ticker is alive-for-some-part and included.
     loader = EquityDataLoader("sp500", "2000-01-01", "2026-12-31")
     universe = loader.universe()
-    by_ticker = {t: (l, d) for (t, l, d) in universe}
+    by_ticker = {t: (listed, d) for (t, listed, d) in universe}
     non_null_delisted = [
         t for t in DELISTED_TICKERS
         if t in by_ticker and by_ticker[t][1] is not None
@@ -84,3 +84,94 @@ def test_ticker_delisted_during_window_is_included():
     assert "LEH" in tickers
     leh_entry = [entry for entry in universe if entry[0] == "LEH"][0]
     assert leh_entry[2] == date(2008, 9, 22)
+
+
+# ---------------------------------------------------------------------------
+# m7: EquityDataLoader + registry error-path tests.
+# ---------------------------------------------------------------------------
+
+
+def _write_universe_config(tmp_path, csv_rel=None, toml_body=None):
+    """Helper: write a synthetic universe config + CSV under tmp_path."""
+    csv = tmp_path / "u.csv"
+    csv.write_text(
+        "ticker,listed_at,delisted_at,name\nAAPL,,,Apple\n", encoding="utf-8"
+    )
+    csv_path = csv_rel or csv.as_posix()
+    toml = tmp_path / "u.toml"
+    toml.write_text(
+        toml_body
+        or (
+            "[universe]\nname=\"u\"\n"
+            f"universe_file='{csv_path}'\nsource=\"test\"\n"
+        ),
+        encoding="utf-8",
+    )
+    return toml
+
+
+def test_loader_unknown_universe_raises_file_not_found():
+    from equity.data.registry import get_universe_info
+
+    with pytest.raises(FileNotFoundError, match="Unknown equity universe"):
+        get_universe_info("definitely_not_a_universe_xyz")
+
+
+def test_loader_config_lacking_universe_file_raises_value_error(tmp_path, monkeypatch):
+    """A TOML that exists but has no [universe].universe_file -> ValueError."""
+    from equity.data.registry import get_universe_info
+
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "bare.toml").write_text(
+        '[universe]\nname = "bare"\n', encoding="utf-8"
+    )
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    with pytest.raises(ValueError, match="not a universe config"):
+        get_universe_info("bare")
+
+
+def test_loader_universe_csv_missing_required_column_raises(tmp_path, monkeypatch):
+    csv = tmp_path / "u.csv"
+    # Missing 'delisted_at'.
+    csv.write_text(
+        "ticker,listed_at,name\nAAPL,,Apple\n", encoding="utf-8"
+    )
+    cfg_dir = tmp_path / "cfg"
+    cfg_dir.mkdir()
+    (cfg_dir / "u.toml").write_text(
+        f"[universe]\nname=\"u\"\nuniverse_file='{csv.as_posix()}'\nsource=\"t\"\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", cfg_dir)
+    with pytest.raises(ValueError, match="missing required column 'delisted_at'"):
+        EquityDataLoader("u", "2024-01-01", "2024-12-31")
+
+
+# ---------------------------------------------------------------------------
+# m2: registry path-traversal name rejection.
+# ---------------------------------------------------------------------------
+
+
+def test_registry_rejects_path_traversal_universe_name():
+    from equity.data.registry import _validate_universe_name
+
+    for bad in ["..", "../x", "foo/bar", "foo\\bar", "a/../b"]:
+        with pytest.raises(ValueError, match="must not contain"):
+            _validate_universe_name(bad)
+    # Empty name rejected.
+    with pytest.raises(ValueError, match="non-empty"):
+        _validate_universe_name("")
+    # A clean name passes (no exception).
+    _validate_universe_name("sp500")
+    _validate_universe_name("sp500_2024")
+
+
+def test_registry_path_traversal_via_get_universe_info(tmp_path, monkeypatch):
+    """get_universe_info must reject names that would escape CONFIG_DIR."""
+    from equity.data.registry import get_universe_info
+
+    monkeypatch.setattr("equity.data.registry.CONFIG_DIR", tmp_path)
+    with pytest.raises(ValueError, match="must not contain"):
+        get_universe_info("../../etc/passwd")
+

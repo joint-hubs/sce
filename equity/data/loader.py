@@ -8,6 +8,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
 import shutil
 from datetime import date
 from pathlib import Path
@@ -15,6 +18,7 @@ from typing import Any
 
 import pandas as pd
 
+from equity.data.fetch import STORE_MARKER
 from equity.data.registry import PROJECT_ROOT, get_universe_info
 
 try:
@@ -58,6 +62,116 @@ def _dead_reason(
     if not pd.isna(listed_at) and pd.Timestamp(listed_at) > end:
         return f"listed on {pd.Timestamp(listed_at).date()} after end"
     return "outside window"
+
+
+def _resolve_store_path(out_dir: str | Path, default_rel: str) -> Path:
+    """Resolve a store output dir to an absolute path under PROJECT_ROOT.
+
+    Relative paths are joined to ``PROJECT_ROOT``; absolute paths are honored
+    verbatim (the caller is responsible for not pointing at ``C:\\`` etc. --
+    :func:`_safe_rmtree` enforces a containment guard before any deletion).
+    """
+    out_path = Path(out_dir)
+    if not out_path.is_absolute():
+        out_path = PROJECT_ROOT / out_path
+    return out_path
+
+
+def _ensure_store_marker(out_path: Path) -> None:
+    """Write the ``.equity_store`` sentinel marker into ``out_path`` (first
+    creation). The marker is what permits :func:`_safe_rmtree` to clear the
+    directory on a later rewrite -- its absence on an existing tree is
+    treated as a misconfigured path and the rmtree is refused.
+    """
+    out_path.mkdir(parents=True, exist_ok=True)
+    marker = out_path / STORE_MARKER
+    if not marker.exists():
+        marker.write_text(
+            "equity parquet store -- safe to rewrite via EquityDataLoader\n",
+            encoding="utf-8",
+        )
+
+
+def _safe_rmtree(out_path: Path) -> None:
+    """Remove ``out_path`` if and only if it is inside ``PROJECT_ROOT`` AND
+    contains the ``.equity_store`` marker.
+
+    Defense against a misconfigured TOML / CLI ``output_dir`` pointing at an
+    existing tree outside the repo (``C:\\Users\\...``, ``~/``, repo root). A
+    missing marker on an existing directory is treated as "this is not ours"
+    and the rmtree is refused (raise :class:`ValueError`); on first creation
+    the marker is written by :func:`_ensure_store_marker`.
+    """
+    resolved = out_path.resolve()
+    try:
+        resolved.relative_to(PROJECT_ROOT.resolve())
+    except ValueError:
+        raise ValueError(
+            f"Refusing to remove {out_path}: resolved path "
+            f"{resolved} is outside PROJECT_ROOT ({PROJECT_ROOT}). "
+            "Store output_dir must live under the repo root."
+        )
+    if not resolved.exists():
+        return
+    marker = resolved / STORE_MARKER
+    if not marker.exists():
+        raise ValueError(
+            f"Refusing to remove {out_path}: missing sentinel marker "
+            f"'{STORE_MARKER}' (the directory is not recognized as an "
+            "equity store -- refusing to delete a non-empty tree)."
+        )
+    log.info("Removing equity store at %s (rewrite).", resolved)
+    shutil.rmtree(resolved)
+
+
+def _store_content_hash(df: pd.DataFrame) -> str:
+    """Return a deterministic sha256 over the canonical price/articles frame.
+
+    The frame is serialized to a sorted JSON list of records (columns in
+    canonical order, rows sorted by all columns) so two calls producing the
+    same logical frame yield the same hash regardless of row order.
+    """
+    cols = list(df.columns)
+    sorted_df = df.sort_values(cols).reset_index(drop=True)
+    payload = sorted_df.to_json(orient="records", date_format="iso", default_handler=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _write_store_meta(
+    out_path: Path,
+    *,
+    kind: str,
+    ticker: str | None,
+    period: str,
+    row_count: int,
+    content_hash: str,
+    extra: dict[str, Any] | None = None,
+) -> Path:
+    """Write ``_meta.json`` next to the parquet store with provenance fields.
+
+    Records the fetch UTC timestamp, the data ``kind`` (``"prices"`` /
+    ``"articles"``), the source library version (yfinance), the requested
+    ``period`` / ticker, the row count and a content hash so two runs over
+    the same window can be compared for reproducibility drift (see review
+    finding M3 -- yfinance is an unofficial scraper whose historical values
+    can be revised retroactively).
+    """
+    meta: dict[str, Any] = {
+        "kind": kind,
+        "fetched_at_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+        "row_count": int(row_count),
+        "content_sha256": content_hash,
+        "period": period,
+        "ticker": ticker,
+    }
+    if extra:
+        meta.update(extra)
+    meta_path = out_path / "_meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2, sort_keys=True), encoding="utf-8")
+    return meta_path
+
+
+log = logging.getLogger(__name__)
 
 
 class EquityDataLoader:
@@ -198,7 +312,11 @@ class EquityDataLoader:
             payload = tomllib.load(handle)
         return payload.get("prices", {})
 
-    def fetch_prices(self, output_dir: str | Path | None = None) -> Path:
+    def fetch_prices(
+        self,
+        output_dir: str | Path | None = None,
+        frozen: bool = False,
+    ) -> Path:
         """Fetch OHLCV bars for the alive universe and write a partitioned
         parquet store.
 
@@ -207,6 +325,9 @@ class EquityDataLoader:
         1. Resolve the alive-ticker set via :meth:`universe` (delisting-aware).
         2. Fetch OHLCV via :func:`equity.data.fetch.fetch_yfinance_ohlcv`
            (in-process yfinance; per-ticker errors are logged and skipped).
+           The yfinance daily-bar index (00:00 ET) is canonicalized to the
+           XNYS session close (16:00 / 13:00 ET) so ``period_close_ts`` is a
+           valid foreign key for the S1.3 join.
         3. Validate the long-form frame with
            :func:`equity.data.schema.validate_prices` (pandera schema + tz-aware
            ``period_close_ts`` guard) and assert primary-key uniqueness via
@@ -214,12 +335,14 @@ class EquityDataLoader:
         4. Write a Hive-style partitioned parquet dataset under ``output_dir``,
            partitioned by ``year``/``month`` derived from ``period_close_ts``
            (America/New_York session close).
+        5. Write ``_meta.json`` next to the store with provenance (fetch UTC
+           timestamp, yfinance version, row count, sha256 content hash) so two
+           runs over the same window can be compared for reproducibility drift.
 
         The write is a **full rewrite** (not incremental): if ``output_dir``
-        exists it is removed first so stale partitions from prior runs do not
-        leak in. On read-back, ``year``/``month`` are reconstructed from the
-        Hive path (they are partition keys, not data columns -- see
-        ``equity/data/README.md``).
+        exists it is removed first (via :func:`_safe_rmtree`, which refuses to
+        delete paths outside ``PROJECT_ROOT`` or missing the ``.equity_store``
+        sentinel marker) so stale partitions from prior runs do not leak in.
 
         Parameters
         ----------
@@ -227,6 +350,12 @@ class EquityDataLoader:
             Output directory for the partitioned parquet store. When ``None``,
             falls back to ``[prices].output_dir`` from the universe TOML
             (default ``data/equity/prices`` relative to ``PROJECT_ROOT``).
+        frozen:
+            When ``True``, refuse to re-fetch if the store already exists with
+            a ``_meta.json`` whose ``period`` covers ``[start, end]``. This is
+            a best-effort protection against silent data drift from
+            retroactively revised yfinance values (review finding M3). The
+            store is left untouched; the existing ``out_path`` is returned.
 
         Returns
         -------
@@ -236,7 +365,10 @@ class EquityDataLoader:
         Raises
         ------
         ValueError
-            If the alive universe is empty for the window.
+            If the alive universe is empty for the window, or if the resolved
+            ``output_dir`` is outside ``PROJECT_ROOT`` / missing the marker on
+            an existing tree, or if ``frozen=True`` and the store already
+            covers the window.
         RuntimeError
             If yfinance returned no rows for any ticker.
         """
@@ -248,11 +380,32 @@ class EquityDataLoader:
 
         prices_cfg = self._load_prices_config()
         if output_dir is not None:
-            out_path = Path(output_dir)
+            out_path = _resolve_store_path(output_dir, "data/equity/prices")
         else:
-            out_path = Path(prices_cfg.get("output_dir", "data/equity/prices"))
-        if not out_path.is_absolute():
-            out_path = PROJECT_ROOT / out_path
+            out_path = _resolve_store_path(
+                prices_cfg.get("output_dir", "data/equity/prices"),
+                "data/equity/prices",
+            )
+
+        if frozen and out_path.exists():
+            meta_path = out_path / "_meta.json"
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    if meta.get("kind") == "prices" and meta.get("period") == self.period:
+                        log.info(
+                            "frozen prices store already present at %s "
+                            "(period=%s); skipping re-fetch.",
+                            out_path,
+                            self.period,
+                        )
+                        return out_path
+                except (OSError, ValueError) as exc:
+                    log.warning(
+                        "Could not parse %s (%s); ignoring frozen flag.",
+                        meta_path,
+                        exc,
+                    )
 
         alive = self.universe()
         tickers = [t for (t, _listed, _delisted) in alive]
@@ -276,16 +429,39 @@ class EquityDataLoader:
         out["year"] = out["period_close_ts"].dt.year
         out["month"] = out["period_close_ts"].dt.month
 
-        # Full rewrite: clear stale partitions before writing.
+        # Full rewrite: clear stale partitions before writing. The guard
+        # refuses to rmtree paths outside PROJECT_ROOT or missing the marker.
         if out_path.exists():
-            shutil.rmtree(out_path)
-        out_path.mkdir(parents=True, exist_ok=True)
+            _safe_rmtree(out_path)
+        _ensure_store_marker(out_path)
 
         partition_cols = prices_cfg.get("partition_cols", ["year", "month"])
         out.to_parquet(
             out_path,
             partition_cols=partition_cols,
             index=False,
+        )
+
+        try:
+            import yfinance as _yf
+
+            yf_version = _yf.__version__
+        except Exception:  # pragma: no cover - yfinance is an optional dep
+            yf_version = None
+        _write_store_meta(
+            out_path,
+            kind="prices",
+            ticker=None,
+            period=self.period,
+            row_count=int(len(out)),
+            content_hash=_store_content_hash(validated),
+            extra={
+                "yfinance_version": yf_version,
+                "universe": self.universe_name,
+                "window_start": self.start.date().isoformat(),
+                "window_end": self.end.date().isoformat(),
+                "tickers_count": int(len(tickers)),
+            },
         )
         return out_path
 
@@ -303,7 +479,11 @@ class EquityDataLoader:
             payload = tomllib.load(handle)
         return payload.get("articles", {})
 
-    def fetch_articles(self, output_dir: str | Path | None = None) -> Path:
+    def fetch_articles(
+        self,
+        output_dir: str | Path | None = None,
+        frozen: bool = False,
+    ) -> Path:
         """Load articles from the configured seed CSV and write a partitioned
         parquet store.
 
@@ -319,10 +499,12 @@ class EquityDataLoader:
            :func:`equity.data.schema.assert_articles_primary_key_unique`.
         4. Write a Hive-style partitioned parquet dataset under ``output_dir``,
            partitioned by ``year``/``month`` derived from ``published_at`` (UTC).
+        5. Write ``_meta.json`` next to the store with provenance (fetch UTC
+           timestamp, row count, sha256 content hash).
 
         The write is a **full rewrite** (not incremental): if ``output_dir``
-        exists it is removed first so stale partitions do not leak in. On
-        read-back, ``year``/``month`` are reconstructed from the Hive path.
+        exists it is removed first (via :func:`_safe_rmtree`) so stale
+        partitions do not leak in.
 
         Parameters
         ----------
@@ -330,6 +512,9 @@ class EquityDataLoader:
             Output directory for the partitioned parquet store. When ``None``,
             falls back to ``[articles].output_dir`` from the universe TOML
             (default ``data/equity/articles`` relative to ``PROJECT_ROOT``).
+        frozen:
+            When ``True``, refuse to re-write if the store already exists with
+            a ``_meta.json``. Best-effort protection against silent drift.
 
         Returns
         -------
@@ -339,7 +524,8 @@ class EquityDataLoader:
         Raises
         ------
         ValueError
-            If the seed frame is empty after validation.
+            If the seed frame is empty after validation, or if the resolved
+            ``output_dir`` is outside ``PROJECT_ROOT`` / missing the marker.
         """
         from equity.data.fetch import fetch_articles_from_seed
         from equity.data.schema import (
@@ -349,11 +535,19 @@ class EquityDataLoader:
 
         articles_cfg = self._load_articles_config()
         if output_dir is not None:
-            out_path = Path(output_dir)
+            out_path = _resolve_store_path(output_dir, "data/equity/articles")
         else:
-            out_path = Path(articles_cfg.get("output_dir", "data/equity/articles"))
-        if not out_path.is_absolute():
-            out_path = PROJECT_ROOT / out_path
+            out_path = _resolve_store_path(
+                articles_cfg.get("output_dir", "data/equity/articles"),
+                "data/equity/articles",
+            )
+
+        if frozen and out_path.exists() and (out_path / "_meta.json").exists():
+            log.info(
+                "frozen articles store already present at %s; skipping re-write.",
+                out_path,
+            )
+            return out_path
 
         seed_rel = articles_cfg.get("seed_file", "configs/equity/articles_seed.csv")
         seed_path = Path(seed_rel)
@@ -375,14 +569,27 @@ class EquityDataLoader:
 
         # Full rewrite: clear stale partitions before writing.
         if out_path.exists():
-            shutil.rmtree(out_path)
-        out_path.mkdir(parents=True, exist_ok=True)
+            _safe_rmtree(out_path)
+        _ensure_store_marker(out_path)
 
         partition_cols = articles_cfg.get("partition_cols", ["year", "month"])
         out.to_parquet(
             out_path,
             partition_cols=partition_cols,
             index=False,
+        )
+
+        _write_store_meta(
+            out_path,
+            kind="articles",
+            ticker=None,
+            period="seed",
+            row_count=int(len(out)),
+            content_hash=_store_content_hash(validated),
+            extra={
+                "universe": self.universe_name,
+                "seed_file": str(seed_path),
+            },
         )
         return out_path
 
@@ -392,7 +599,7 @@ class EquityDataLoader:
         articles_path: str | Path | None = None,
         output_dir: str | Path | None = None,
     ) -> Path:
-        """Point-in-time join articles to prices via the XNYS session-close
+        """Point-in-time join articles to prices via the price-store session
         boundaries.
 
         Each article is bound to exactly one trading period ``P`` such that::
@@ -400,16 +607,26 @@ class EquityDataLoader:
             period_close(P-1) < published_at <= period_close(P)
 
         where ``period_close`` is the NYSE session close (16:00 ET, except
-        early-close sessions) from ``pandas_market_calendars``'s ``"XNYS"``
-        calendar. Holiday / weekend roll-forward is implicit: the XNYS
-        schedule simply omits non-trading days, so an article published on
-        2024-07-04 (US holiday) or 2024-07-06 (Saturday) binds to the next
-        trading session (2024-07-05 / 2024-07-08 respectively).
-
-        The comparison is performed in **UTC**: ``period_close_ts``
-        (tz-aware ``America/New_York``) is converted to UTC and
-        ``published_at`` is already UTC, so the inequality is DST-safe
+        early-close sessions). The comparison is performed in **UTC**:
+        ``period_close_ts`` (tz-aware ``America/New_York``) is converted to UTC
+        and ``published_at`` is already UTC, so the inequality is DST-safe
         (no wall-clock arithmetic across DST transitions).
+
+        Binding index
+        -------------
+        The bfill index is built **from the prices store's actual
+        ``period_close_ts`` values** (sorted, de-duplicated, in UTC) -- NOT
+        from the XNYS schedule for the loader window. This guarantees every
+        bound ``period_close_ts`` is a real key in ``prices.parquet`` (no
+        phantom FK). Articles published after the last stored session close
+        are **dropped** (no +1-day extension: an article published Friday
+        17:00 ET binds to the next session *present in prices.parquet within
+        the window*; if none exists, the article is dropped -- under-inclusion,
+        NOT leakage; see README "Under-inclusion at window edges").
+
+        Both ``period_close_ts`` and ``published_at`` are written to
+        ``articles_joined.parquet`` canonicalized to **UTC** (downstream S2+
+        slices can compare them without tz juggling).
 
         Parameters
         ----------
@@ -433,15 +650,15 @@ class EquityDataLoader:
 
         Raises
         ------
+        FileNotFoundError
+            If the prices or articles store does not exist.
         ValueError
-            If prices or articles are empty after the alive-ticker filter.
+            If prices or articles are empty after the alive-ticker filter, or
+            if no articles could be bound to a stored session.
         """
-        from pandas_market_calendars import get_calendar
-
         from equity.data.schema import (
             CANONICAL_ARTICLE_COLUMNS,
             CANONICAL_PRICE_COLUMNS,
-            EXCHANGE_TZ,
             validate_articles,
             validate_prices,
         )
@@ -515,52 +732,40 @@ class EquityDataLoader:
                 "nothing to join."
             )
 
-        # ---- Build the XNYS session-close boundary index ------------------
-        # Use the loader's [start, end] window (extended by 1 day on each
-        # side) so articles published near the window edges still find a
-        # session. Sessions outside this range are not consulted.
-        cal = get_calendar("XNYS")
-        sched_start = self.start - pd.Timedelta(days=1)
-        sched_end = self.end + pd.Timedelta(days=1)
-        sched = cal.schedule(
-            sched_start.strftime("%Y-%m-%d"),
-            sched_end.strftime("%Y-%m-%d"),
-            tz=EXCHANGE_TZ,
+        # ---- Build the bfill index from the ACTUAL prices sessions -------
+        # Restrict to the price sessions that actually exist in the store so
+        # every bound period_close_ts is a valid FK into prices.parquet (no
+        # phantom keys from a schedule-derived window). Drop the loader's
+        # [start-1d, end+1d] schedule entirely (review finding B2).
+        closes_utc = pd.DatetimeIndex(
+            sorted(set(prices["period_close_ts"].dt.tz_convert("UTC").unique()))
         )
-        # sched["market_close"] is tz-aware America/New_York. Convert to UTC
-        # for the comparison; the inequality
-        #   period_close(P-1) < published_at <= period_close(P)
-        # is then evaluated entirely in UTC (DST-safe). We sort the closes
-        # ascending and use Index.get_indexer with method="bfill", which
-        # returns the smallest index i such that closes[i] >= published_at --
-        # exactly the right-hand side of the rule. The left-hand side
-        # (period_close(P-1) < published_at) is trivially satisfied for pos==0
-        # (treat period_close(P-1) as -infinity) and, for pos>0, is implied by
-        # the bfill semantics: if closes[pos-1] >= published_at then bfill would
-        # have returned pos-1 instead.
-        closes_utc = sched["market_close"].dt.tz_convert("UTC").sort_values()
-        closes_idx = pd.DatetimeIndex(closes_utc)  # tz-aware UTC, sorted
+        if len(closes_utc) == 0:
+            raise ValueError("Prices store has no session-close timestamps.")
+
+        # Vectorized bfill (review finding m3): single get_indexer call on the
+        # numpy array, no Python per-row loop. bfill returns the smallest i
+        # such that closes_utc[i] >= published_at -- the right-hand side of
+        # the PIT rule. -1 means published_at > last stored session close
+        # (article outside the store's coverage -> drop, under-inclusion).
+        pub_utc = articles["published_at"].dt.tz_convert("UTC").to_numpy()
+        pos = closes_utc.get_indexer(pub_utc, method="bfill")
 
         joined_rows: list[dict] = []
-        for _, row in articles.iterrows():
-            pub = pd.Timestamp(row["published_at"])
-            if pub.tz is None:
-                pub = pub.tz_localize("UTC")
-            else:
-                pub = pub.tz_convert("UTC")
-            # Smallest i such that closes_idx[i] >= pub.
-            pos_arr = closes_idx.get_indexer([pub], method="bfill")
-            pos = int(pos_arr[0])
-            if pos < 0:
-                # published_at > last session close -- outside the window;
-                # skip (cannot bind to a period).
+        n_dropped = 0
+        for i, p in enumerate(pos):
+            if p < 0:
+                n_dropped += 1
                 continue
-            period_close = pd.Timestamp(closes_idx[pos]).tz_convert(EXCHANGE_TZ)
+            period_close_utc = pd.Timestamp(closes_utc[p])
+            row = articles.iloc[i]
             joined_rows.append(
                 {
                     "ticker": row["ticker"],
-                    "period_close_ts": period_close,
-                    "published_at": pub,
+                    # Canonicalize BOTH columns to UTC in the joined output
+                    # (review finding n3) so downstream slices are tz-uniform.
+                    "period_close_ts": period_close_utc,
+                    "published_at": pd.Timestamp(pub_utc[i]),
                     "text": row["text"],
                     "source": row["source"],
                 }
@@ -568,11 +773,26 @@ class EquityDataLoader:
 
         if not joined_rows:
             raise ValueError(
-                "No articles could be bound to a trading period in the "
-                "loader's [start, end] window."
+                "No articles could be bound to a trading period present in "
+                "the prices store (all " + str(len(articles)) + " articles "
+                "were published after the last stored session close)."
             )
+        if n_dropped > 0:
+            log.info(
+                "join_articles_to_prices: dropped %d article(s) published "
+                "after the last stored session close (under-inclusion).",
+                n_dropped,
+            )
+
         joined = pd.DataFrame(joined_rows)
         joined = joined[["ticker", "period_close_ts", "published_at", "text", "source"]]
+        # Canonicalize both timestamp columns to UTC in the parquet output.
+        joined["period_close_ts"] = joined["period_close_ts"].astype(
+            pd.DatetimeTZDtype(tz="UTC")
+        )
+        joined["published_at"] = joined["published_at"].astype(
+            pd.DatetimeTZDtype(tz="UTC")
+        )
         joined.to_parquet(out_file, index=False)
         return out_file
 

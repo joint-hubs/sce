@@ -1,4 +1,4 @@
-# Seed reference for S1.1. listed_at approximate for historical delisted names; delisted_at = verified delisting/event date. Full historical-constituents dataset wired in S1.2. Source: public record (bankruptcy filings, acquisition close dates).
+# Seed reference for S1.1. listed_at approximate for historical delisted names; delisted_at = verified delisting/event date. Full historical-constituents dataset wired in S1.1. Source: public record (bankruptcy filings, acquisition close dates).
 # listed_at is left empty for delisted rows (the loader treats missing listed_at as -infinity / always listed in the past). delisted_at is left empty for current members (the loader treats missing delisted_at as +infinity / still listed). Tickers may contain dots (e.g. BRK.B).
 ticker,listed_at,delisted_at,name
 ENE,,2002-01-15,Enron Corp (bankruptcy; NYSE halt 2002-01-11)

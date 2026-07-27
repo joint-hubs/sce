@@ -41,7 +41,7 @@ CANONICAL_PRICE_COLUMNS: list[str] = [
     "close",
     "adj_close",
     "volume",
-    "vwap",
+    "hlc_average",
 ]
 
 # Exchange-local timezone for US daily bars. yfinance returns America/New_York
@@ -71,7 +71,7 @@ prices_schema: pa.DataFrameSchema = pa.DataFrameSchema(
         "close": pa.Column(float, nullable=True, coerce=True),
         "adj_close": pa.Column(float, nullable=True, coerce=True),
         "volume": pa.Column(float, nullable=True, coerce=True),
-        "vwap": pa.Column(float, nullable=True, coerce=True),
+        "hlc_average": pa.Column(float, nullable=True, coerce=True),
     },
     strict=True,
     coerce=False,

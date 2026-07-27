@@ -33,7 +33,9 @@ pattern; NOT imported into `sce/`):
   with public-record delist dates); `articles_seed.csv`.
 - `pyproject.toml`: new `[equity]` extra (yfinance, pandas_market_calendars,
   pandera); `packages.find` extended to `["sce*", "equity*"]`; `all` aggregator
-  extended; `equity.__version__ = 0.3.0`.
+  extended; `--cov=equity` added to pytest; upper bounds pinned on the three
+  equity deps. `equity/` has no separate `__version__` (bundled into the
+  stat-context wheel).
 
 **Tests:** `tests/equity/` — 37 passed + 2 skipped (live yfinance + Kaggle
 integration tests gated by `SCE_EQUITY_LIVE_TEST=1`; no network on default run).
@@ -47,9 +49,11 @@ walk-forward · Q7 quantile heads.
 **Assumptions to confirm in review:** (1) reference delisted-tickers = committed
 seed CSV (full historical-constituents Kaggle dataset deferred to S1.2 follow-up,
 seed swappable via TOML `universe_file`); (2) `published_at` canonical tz = UTC;
-(3) Cam Nugent Kaggle slug `camnugent/sandp500`; (4) ticker-alias mapping (e.g.
-`ENRN`→`ENE`) not implemented — S1.3 filters out-of-window tickers; (5) `equity/`
-sibling package does not touch `stat-context` core deps or `import sce`.
+(3) Cam Nugent Kaggle slug `camnugent/sandp500`; (4) ticker-alias mapping not
+implemented — S1.3 filters out-of-window tickers (the articles seed uses a
+synthetic `__TEST_NOT_IN_UNIVERSE__` sentinel for the out-of-universe test
+case, not a real-looking ticker); (5) `equity/` sibling package does not touch
+`stat-context` core deps or `import sce`.
 
 **Next (after review/merge):** S2 (FinBERT sentiment + per-period aggregation)
 → S3 (lag-aware features) → S4 (SCE equity enrichment). Subtask plan:

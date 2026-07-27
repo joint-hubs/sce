@@ -9,7 +9,10 @@
 from equity.data.loader import EquityDataLoader
 from equity.data.registry import UniverseInfo, get_universe_info, list_universes
 
-__version__ = "0.3.0"
+# NOTE: equity has no separate pyproject; it is bundled into the stat-context
+# wheel (packages.find include=["sce*","equity*"]). Do NOT declare a separate
+# equity.__version__ -- the canonical version is stat-context's (pyproject.toml).
+
 __all__ = [
     "EquityDataLoader",
     "UniverseInfo",

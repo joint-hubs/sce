@@ -1,7 +1,7 @@
 """
 @module: equity.data.fetch
-@depends: yfinance, pandas
-@exports: fetch_yfinance_ohlcv
+@depends: yfinance, pandas, pandas_market_calendars
+@exports: fetch_yfinance_ohlcv, fetch_articles_from_seed
 @paper_ref: N/A
 @data_flow: tickers + window -> yfinance (in-process) -> long-form OHLCV frame
 
@@ -11,32 +11,47 @@ yfinance wrapper producing the canonical long-form OHLCV DataFrame consumed by
 Timezone semantics
 -------------------
 ``yfinance.Ticker.history(interval="1d")`` returns a DataFrame indexed by a
-tz-aware ``America/New_York`` DatetimeIndex; the index value for a given
-session is the session close (16:00 ET for US daily bars). We promote that
-index to the ``period_close_ts`` column verbatim -- never convert to UTC.
+tz-aware ``America/New_York`` DatetimeIndex, but the index value for a given
+session is the **exchange-local midnight (00:00 ET)**, NOT the session close.
+To make ``prices.parquet.period_close_ts`` a valid key consumable by the
+point-in-time join in S1.3 (which derives ``period_close_ts`` from the XNYS
+``market_close`` -- 16:00 ET, or 13:00 ET on early-close sessions), we
+**canonicalize** the index to the XNYS session close for each date. The
+00:00 ET index value is replaced by the 16:00 / 13:00 ET close from
+``pandas_market_calendars``. See :func:`_canonicalize_session_close`.
 
-VWAP proxy
------------
-yfinance does not return VWAP for daily bars. We compute the standard proxy
-``vwap = (high + low + close) / 3`` and document it here. If a future source
-provides a true VWAP, replace the computation in :func:`_add_vwap`.
+HLC average (NOT VWAP)
+-----------------------
+yfinance does not return VWAP for daily bars. We compute the standard
+``(high + low + close) / 3`` proxy but name the column ``hlc_average`` (NOT
+``vwap``) -- the formula is a simple average, not a volume-weighted value.
+Renaming prevents S2 feature engineering from misinterpreting the column as
+true VWAP. See :func:`_add_hlc_average`.
 
 Error handling
 ---------------
 Per-ticker errors (delisted within the window, no data, transient network) are
 logged and the ticker is skipped -- the batch never crashes on a single
-ticker. An empty input ticker list returns an empty canonical frame.
+ticker. An empty input ticker list returns an empty canonical frame. A
+``None`` frame from yfinance (possible fetch error masked by yfinance
+internals) is logged as a WARNING, not silently treated as "no data".
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 import yfinance as yf
 
-from equity.data.schema import CANONICAL_PRICE_COLUMNS
+from equity.data.schema import (
+    ARTICLE_TZ,
+    CANONICAL_ARTICLE_COLUMNS,
+    CANONICAL_PRICE_COLUMNS,
+    EXCHANGE_TZ,
+)
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +66,10 @@ _YF_FIELD_MAP: dict[str, str] = {
     "Volume": "volume",
 }
 
+# Sentinel marker file written into each parquet store directory by the loader.
+# Used by the destructive-rmtree containment guard (see loader._safe_rmtree).
+STORE_MARKER = ".equity_store"
+
 
 def _empty_canonical() -> pd.DataFrame:
     """Return an empty DataFrame with the canonical columns (object dtype).
@@ -62,17 +81,75 @@ def _empty_canonical() -> pd.DataFrame:
     return pd.DataFrame(columns=CANONICAL_PRICE_COLUMNS)
 
 
-def _add_vwap(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute ``vwap = (high + low + close) / 3`` if missing.
+def _add_hlc_average(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute ``hlc_average = (high + low + close) / 3`` if the column is
+    absent.
 
-    yfinance does not return VWAP for daily bars; this is the standard proxy.
-    The result is left as ``float`` (matches the canonical schema) and is
-    ``NaN`` where any of high/low/close is ``NaN`` (partial bars).
+    yfinance does not return VWAP for daily bars; this is the standard HLC
+    average proxy (NOT a volume-weighted value -- hence the honest column
+    name). The result is left as ``float`` (matches the canonical schema) and
+    is ``NaN`` where any of high/low/close is ``NaN`` (partial bars).
     """
-    if "vwap" not in df.columns or df["vwap"].isna().all():
+    if "hlc_average" not in df.columns:
         df = df.copy()
-        df["vwap"] = (df["high"] + df["low"] + df["close"]) / 3.0
+        df["hlc_average"] = (df["high"] + df["low"] + df["close"]) / 3.0
     return df
+
+
+def _canonicalize_session_close(
+    index: pd.DatetimeIndex, cal, period: str = "1d"
+) -> tuple[pd.DatetimeIndex, pd.Series]:
+    """Map each exchange-local-midnight (00:00 ET) index value to the XNYS
+    session-close timestamp for its date.
+
+    yfinance daily bars are indexed at 00:00 ET (exchange-local midnight), not
+    the 16:00 ET session close. The point-in-time join in
+    :meth:`EquityDataLoader.join_articles_to_prices` derives ``period_close_ts``
+    from the XNYS ``market_close`` (16:00 ET, or 13:00 ET on early-close
+    sessions), so a 00:00-keyed ``prices.parquet`` would never align as a
+    foreign key. This function canonicalizes the fetch index to the XNYS
+    close for each session date, making ``prices.parquet.period_close_ts`` a
+    valid key the join can hit.
+
+    Parameters
+    ----------
+    index:
+        tz-aware ``America/New_York`` DatetimeIndex from yfinance (00:00 ET
+        values).
+    cal:
+        ``pandas_market_calendars`` XNYS calendar instance.
+    period:
+        Bar interval (only ``"1d"`` is canonicalized; intraday periods are
+        returned unchanged).
+
+    Returns
+    -------
+    (canonicalized_index, keep_mask)
+        ``canonicalized_index`` is a tz-aware ``America/New_York``
+        DatetimeIndex aligned 1:1 with the input ``index`` (``NaT`` where the
+        input date has no XNYS session -- e.g. a holiday that slipped through
+        yfinance; the caller drops those rows via ``keep_mask``).
+        ``keep_mask`` is a boolean Series (aligned to ``index``) that is
+        ``True`` for rows whose date has an XNYS session.
+    """
+    if period != "1d" or len(index) == 0:
+        return index, pd.Series([True] * len(index), index=index)
+    # Normalize each index value to its calendar date (00:00 ET -> date).
+    dates = pd.DatetimeIndex([pd.Timestamp(ts).normalize() for ts in index])
+    sched = cal.schedule(
+        dates.min().strftime("%Y-%m-%d"),
+        dates.max().strftime("%Y-%m-%d"),
+        tz=EXCHANGE_TZ,
+    )
+    # market_close is tz-aware America/New_York; build a date -> close map.
+    closes_by_date = {}
+    for ts in sched["market_close"]:
+        closes_by_date[pd.Timestamp(ts).normalize()] = ts
+    mapped = [closes_by_date.get(d) for d in dates]
+    keep = [ts is not None for ts in mapped]
+    cleaned = [ts if ts is not None else pd.NaT for ts in mapped]
+    out_idx = pd.DatetimeIndex(cleaned, tz=EXCHANGE_TZ)
+    return out_idx, pd.Series(keep, index=index)
 
 
 def fetch_yfinance_ohlcv(
@@ -89,8 +166,10 @@ def fetch_yfinance_ohlcv(
         List of ticker symbols (e.g. ``["AAPL", "MSFT"]``). Tickers may
         contain dots (e.g. ``"BRK.B"``).
     start, end:
-        Window bounds (inclusive). Date-like strings or ``datetime.date``.
-        Passed to yfinance as ``YYYY-MM-DD`` strings.
+        Window bounds (**inclusive**). Date-like strings or ``datetime.date``.
+        Passed to yfinance as ``YYYY-MM-DD`` strings; the ``end`` is offset
+        by +1 day before passing because yfinance treats ``end`` as
+        **exclusive**.
     period:
         Bar interval forwarded to yfinance (e.g. ``"1d"`` for daily bars).
 
@@ -99,8 +178,9 @@ def fetch_yfinance_ohlcv(
     pd.DataFrame
         Long-form frame with the canonical 9 columns
         (see :data:`equity.data.schema.CANONICAL_PRICE_COLUMNS`).
-        ``period_close_ts`` is tz-aware ``America/New_York`` (session close).
-        Returns an empty canonical frame if no tickers or no data.
+        ``period_close_ts`` is the **XNYS session close** (16:00 / 13:00 ET),
+        tz-aware ``America/New_York`` (canonicalized from yfinance's 00:00 ET
+        index). Returns an empty canonical frame if no tickers or no data.
 
     Notes
     -----
@@ -112,8 +192,23 @@ def fetch_yfinance_ohlcv(
         return _empty_canonical()
 
     start_str = pd.Timestamp(start).strftime("%Y-%m-%d")
-    end_str = pd.Timestamp(end).strftime("%Y-%m-%d")
+    # yfinance treats `end` as EXCLUSIVE; the loader's `end` is inclusive, so
+    # offset by +1 day to include the last requested day.
+    end_str = (pd.Timestamp(end) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Lazily build the XNYS calendar once per call (used to canonicalize the
+    # 00:00 ET yfinance index to the 16:00/13:00 ET session close).
+    cal = None
+    if period == "1d":
+        from pandas_market_calendars import get_calendar
+
+        cal = get_calendar("XNYS")
+
+    # yfinance raises ``YFException`` subclasses (YFTickerMissingError,
+    # YFPricesMissingError, YFRateLimitError, ...) when a fetch fails; the
+    # pinned version (>=0.2.40,<2) honors these for interval="1d". We catch
+    # broadly and log the exception type explicitly so a non-yfinance error is
+    # visible in the log (rather than silently swallowed as "no data").
     frames: list[pd.DataFrame] = []
     for tk in tickers:
         try:
@@ -123,34 +218,59 @@ def fetch_yfinance_ohlcv(
                 interval=period,
                 auto_adjust=False,  # keep the original Adj Close column
                 actions=False,  # no dividends/splits
-                raise_errors=True,
+                raise_errors=True,  # pinned version honors this for "1d"
             )
         except Exception as exc:  # noqa: BLE001 - yfinance raises various errors
             log.warning(
-                "yfinance: %s failed in [%s, %s]: %s", tk, start_str, end_str, exc
+                "yfinance: %s failed in [%s, %s] (%s): %s",
+                tk,
+                start_str,
+                end_str,
+                type(exc).__name__,
+                exc,
             )
             continue
-        if hist is None or hist.empty:
+        if hist is None:
+            # Possible fetch error masked by yfinance internals -- log at
+            # WARNING (not silently as "no data") so the operator notices.
+            log.warning(
+                "yfinance: returned None for %s in [%s, %s] "
+                "(possible masked fetch error; skipping ticker).",
+                tk,
+                start_str,
+                end_str,
+            )
+            continue
+        if hist.empty:
             log.info(
                 "yfinance: no data for %s in [%s, %s]", tk, start_str, end_str
             )
             continue
 
-        # hist.index is a tz-aware America/New_York DatetimeIndex (session
-        # close for daily bars). Promote it to the period_close_ts column.
+        idx = hist.index
+        if cal is not None:
+            idx, keep = _canonicalize_session_close(idx, cal, period=period)
+            # Drop rows whose date has no XNYS session (holiday that slipped
+            # through yfinance) from BOTH the index and the OHLCV columns so
+            # the lengths stay aligned.
+            keep_arr = keep.to_numpy()
+            hist = hist.loc[keep_arr]
+            idx = idx[keep_arr]
+        # idx is a tz-aware America/New_York DatetimeIndex; for daily bars it
+        # is canonicalized to the session close (16:00/13:00 ET).
         out = pd.DataFrame(
             {
                 "ticker": tk,
-                "period_close_ts": hist.index,
-                "open": hist.get("Open"),
-                "high": hist.get("High"),
-                "low": hist.get("Low"),
-                "close": hist.get("Close"),
-                "adj_close": hist.get("Adj Close"),
-                "volume": hist.get("Volume"),
+                "period_close_ts": idx,
+                "open": hist.get("Open").to_numpy(),
+                "high": hist.get("High").to_numpy(),
+                "low": hist.get("Low").to_numpy(),
+                "close": hist.get("Close").to_numpy(),
+                "adj_close": hist.get("Adj Close").to_numpy(),
+                "volume": hist.get("Volume").to_numpy(),
             }
         ).reset_index(drop=True)
-        out = _add_vwap(out)
+        out = _add_hlc_average(out)
         frames.append(out)
 
     if not frames:
@@ -163,10 +283,6 @@ def fetch_yfinance_ohlcv(
 # ---------------------------------------------------------------------------
 # S1.3: articles ingestion (seed-based; NO network)
 # ---------------------------------------------------------------------------
-
-from pathlib import Path
-
-from equity.data.schema import ARTICLE_TZ, CANONICAL_ARTICLE_COLUMNS
 
 
 def _empty_articles_canonical() -> pd.DataFrame:
@@ -201,6 +317,13 @@ def fetch_articles_from_seed(seed_path: str | Path) -> pd.DataFrame:
         Long-form frame with the canonical 4 columns;
         ``published_at`` is tz-aware ``UTC``. Returns an empty canonical
         frame if the seed contains only a header / comment lines.
+
+    Raises
+    ------
+    FileNotFoundError
+        If ``seed_path`` does not exist.
+    ValueError
+        If the seed is missing any of the 4 required columns.
     """
     path = Path(seed_path)
     if not path.exists():

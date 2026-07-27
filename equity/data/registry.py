@@ -75,8 +75,25 @@ def list_universes() -> list[UniverseInfo]:
     return sorted(infos, key=lambda item: item.name)
 
 
+def _validate_universe_name(name: str) -> None:
+    """Reject universe names containing path separators or traversal sequences.
+
+    The name is interpolated into a path under ``CONFIG_DIR``; an attacker- or
+    user-supplied name with ``/``, ``\\`` or ``..`` could resolve outside that
+    directory (review finding m2). Raise :class:`ValueError` on any such
+    sequence. Empty names are also rejected.
+    """
+    if not name:
+        raise ValueError("Universe name must be a non-empty string.")
+    if "/" in name or "\\" in name or ".." in name:
+        raise ValueError(
+            f"Universe name '{name}' must not contain '/', '\\', or '..'."
+        )
+
+
 def get_universe_info(name: str) -> UniverseInfo:
     """Return universe metadata for a universe name (e.g. ``"sp500"``)."""
+    _validate_universe_name(name)
     config_path = CONFIG_DIR / f"{name}.toml"
     if not config_path.exists():
         raise FileNotFoundError(
@@ -91,4 +108,4 @@ def get_universe_info(name: str) -> UniverseInfo:
     return _universe_info_from_config(config_path)
 
 
-__all__ = ["UniverseInfo", "get_universe_info", "list_universes"]
+__all__ = ["UniverseInfo", "get_universe_info", "list_universes", "_validate_universe_name"]

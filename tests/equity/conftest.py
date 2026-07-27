@@ -41,7 +41,7 @@ def _kaggle_available() -> bool:
     if os.environ.get("SCE_EQUITY_LIVE_TEST") != "1":
         return False
     try:
-        from data.download import parse_source, download_kaggle_file  # noqa: F401
+        from data.download import download_kaggle_file, parse_source  # noqa: F401
     except ImportError:
         return False
     has_env_creds = bool(

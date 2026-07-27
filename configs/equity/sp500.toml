@@ -4,7 +4,7 @@
 
 [universe]
 name = "sp500"
-description = "S&P 500 constituents with delisting-aware registry (seed reference for S1.1; full historical-constituents dataset wired in S1.2)"
+description = "S&P 500 constituents with delisting-aware registry (seed reference for S1.1; full historical-constituents dataset wired in S1.1)"
 source = "in-repo"
 universe_file = "configs/equity/sp500_universe.csv"
 

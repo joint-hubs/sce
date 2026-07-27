@@ -74,9 +74,12 @@ docs = [
     "mkdocstrings[python]>=0.24.0",
 ]
 equity = [
-    "yfinance>=0.2.40",
-    "pandas_market_calendars>=4.3.0",
-    "pandera>=0.20.0",
+    # Upper bounds guard against supply-chain breakage: yfinance is an
+    # unofficial scraper and pandera / pandas_market_calendars can ship
+    # breaking API changes. Pinned to allow the currently-resolved major.
+    "yfinance>=0.2.40,<2",
+    "pandas_market_calendars>=4.3.0,<6",
+    "pandera>=0.20.0,<1",
 ]
 all = [
     "stat-context[models,dev,data,viz,docs,equity]",
@@ -105,7 +108,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--cov=sce --cov-report=html --cov-report=term-missing"
+addopts = "--cov=sce --cov=equity --cov-report=html --cov-report=term-missing"
 
 [tool.black]
 line-length = 100

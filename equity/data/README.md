@@ -5,7 +5,7 @@ This subpackage implements slice S1 of the equity pipeline:
 - **S1.1** delisting-aware universe registry (`registry.py`, `loader.py`)
 - **S1.2** OHLCV ingestion + pandera-validated partitioned parquet (`schema.py`,
   `fetch.py`, `EquityDataLoader.fetch_prices`) — this file documents S1.2.
-- **S1.3** (planned) point-in-time text join with `published_at_guard`.
+- **S1.3** point-in-time text join with `published_at_guard` (implemented).
 
 ## Canonical schema (`prices.parquet`)
 
@@ -14,14 +14,14 @@ Nine data columns, in order (see `equity.data.schema.CANONICAL_PRICE_COLUMNS`):
 | column            | dtype                                  | nullable | notes                                                |
 |-------------------|----------------------------------------|----------|------------------------------------------------------|
 | `ticker`          | `str`                                  | no       | e.g. `AAPL`; may contain dots (`BRK.B`)              |
-| `period_close_ts` | `datetime64[ns, America/New_York]`      | no       | **tz-aware** exchange-local session close (16:00 ET) |
+| `period_close_ts` | `datetime64[ns, America/New_York]`      | no       | **tz-aware** XNYS session close (16:00 / 13:00 ET)  |
 | `open`            | `float`                                | yes      | NaN on partial bars (delisted within window)         |
 | `high`            | `float`                                | yes      |                                                      |
 | `low`             | `float`                                | yes      |                                                      |
 | `close`           | `float`                                | yes      |                                                      |
 | `adj_close`       | `float`                                | yes      | yfinance `Adj Close` (requires `auto_adjust=False`)  |
 | `volume`          | `float`                                | yes      |                                                      |
-| `vwap`            | `float`                                | yes      | proxy `(high+low+close)/3` (yfinance has no daily VWAP) |
+| `hlc_average`     | `float`                                | yes      | `(high+low+close)/3` (NOT VWAP; yfinance has no daily VWAP) |
 
 Primary key: `(ticker, period_close_ts)` — enforced by
 `equity.data.schema.assert_primary_key_unique`.
@@ -33,14 +33,18 @@ downstream code should not rely on them as OHLCV fields.
 
 ### Timezone semantics (PRD requirement)
 
-`period_close_ts` is the **exchange-local session close** (16:00 ET for US
-daily bars), stored as a tz-aware `America/New_York` timestamp. yfinance
-returns an `America/New_York`-aware `DatetimeIndex`; we preserve it verbatim
-and never convert to UTC. Tz-naive values are rejected at validation time
-(the pandera column dtype is `pd.DatetimeTZDtype(tz="America/New_York")` with
-`coerce=False`, so a tz-naive `datetime64[ns]` Series fails the dtype check).
-This is the guard that prevents accidental UTC writes that would break the
-point-in-time text join in S1.3.
+`period_close_ts` is the **XNYS session close** (16:00 ET for normal daily
+bars, 13:00 ET on early-close sessions), stored as a tz-aware
+`America/New_York` timestamp. yfinance returns a `DatetimeIndex` of
+**exchange-local midnight (00:00 ET)**, NOT the session close; the fetcher
+(`equity.data.fetch._canonicalize_session_close`) replaces each 00:00 ET
+index value with the XNYS `market_close` for that date so that
+`prices.parquet.period_close_ts` is a valid foreign key consumable by the S1.3
+point-in-time join (which derives `period_close_ts` from the XNYS schedule).
+Tz-naive values are rejected at validation time (the pandera column dtype is
+`pd.DatetimeTZDtype(tz="America/New_York")` with `coerce=False`, so a
+tz-naive `datetime64[ns]` Series fails the dtype check). This is the guard
+that prevents accidental UTC writes that would break the join in S1.3.
 
 ## Partition layout
 
@@ -66,7 +70,15 @@ files; `pd.read_parquet(output_dir)` reconstructs them from the Hive path.
 
 `fetch_prices()` performs a **full rewrite** (not incremental) of
 `output_dir`: if the directory exists it is removed before writing, so stale
-partitions from prior runs with different windows do not leak in.
+partitions from prior runs with different windows do not leak in. The
+destructive `rmtree` is guarded (see "Containment guard" below): it refuses to
+delete paths outside `PROJECT_ROOT` or directories missing the `.equity_store`
+sentinel marker. A `_meta.json` file is written next to the store with
+provenance (fetch UTC timestamp, yfinance version, row count, sha256 content
+hash) so two runs over the same window can be compared for reproducibility
+drift (see "Reproducibility (S1 limitation)" below). A `frozen=True` flag
+refuses to re-fetch if the store already exists with a `_meta.json` for the
+window.
 
 Round-trip:
 ```python
@@ -76,13 +88,50 @@ out = loader.fetch_prices()               # writes data/equity/prices/
 df = pd.read_parquet(out)                 # 11 cols: 9 canonical + year + month
 ```
 
-## VWAP proxy
+## HLC average (NOT VWAP)
 
-yfinance does not return VWAP for daily bars. We compute the standard proxy
-`vwap = (high + low + close) / 3` in `equity.data.fetch._add_vwap`. The
-result is `NaN` where any of `high`/`low`/`close` is `NaN` (partial bars for
-tickers delisted within the window). If a future source provides a true
-VWAP, replace `_add_vwap`.
+yfinance does not return VWAP for daily bars. We compute the standard
+`(high + low + close) / 3` average in `equity.data.fetch._add_hlc_average` and
+store it under the column name **`hlc_average`** (NOT `vwap`). The formula is
+a simple average, not a volume-weighted value; the honest column name prevents
+S2 feature engineering from misinterpreting it as true VWAP. The result is
+`NaN` where any of `high`/`low`/`close` is `NaN` (partial bars for tickers
+delisted within the window). If a future source provides a true VWAP, add it
+as a separate `vwap` column.
+
+## Containment guard (destructive rmtree)
+
+Both `fetch_prices()` and `fetch_articles()` perform a full rewrite: if the
+output directory exists it is removed before writing. To prevent a
+misconfigured TOML / CLI `output_dir` from deleting an unrelated tree
+(`C:\Users\...`, `~/`, repo root), the rmtree is guarded by
+`equity.data.loader._safe_rmtree`:
+
+1. The resolved path must lie **inside `PROJECT_ROOT`** (absolute paths are
+   honored verbatim -- a path outside the repo is refused with
+   `ValueError`).
+2. An existing directory must contain the `.equity_store` sentinel marker
+   file (written by the loader on first creation). A non-empty tree without
+   the marker is refused -- we treat it as "not ours" and do not delete it.
+
+## Reproducibility (S1 limitation)
+
+yfinance is an unofficial scraper whose historical values (`Adj Close`,
+splits, dividends) can be **revised retroactively** between runs. Two calls
+to `fetch_prices` over the same `[start, end]` window can therefore produce
+different `adj_close` / `volume` rows -- silent data drift propagating into
+features and backtests. `auto_adjust=False` preserves raw prices but does not
+freeze the data. The S1 mitigations are:
+
+- a `_meta.json` is written next to each parquet store with the fetch UTC
+  timestamp, yfinance version, row count and a sha256 content hash, so two
+  runs can be compared for drift;
+- a `frozen=True` flag on `fetch_prices` / `fetch_articles` refuses to
+  re-fetch if the store already exists with a `_meta.json` for the window.
+
+These are **best-effort** mitigations, not a guarantee of reproducibility.
+True frozen snapshots (e.g. content-addressed parquet archives, or a swap to
+a pinned historical vendor like the Cam Nugent Kaggle snapshot) are S2+ work.
 
 ## How to run `fetch_prices`
 
@@ -184,10 +233,32 @@ An article is bound to trading period `P` iff:
 where `period_close` is the NYSE session close from
 `pandas_market_calendars`'s `"XNYS"` calendar (16:00 ET for normal sessions,
 13:00 ET for early-close sessions). The comparison is performed entirely in
-UTC: `period_close_ts` (tz-aware `America/New_York`) is converted to UTC and
-compared with `published_at` (already UTC). An article that cannot be bound
-to any session in the loader's `[start, end]` window (e.g. published after
-the last session close) is dropped from the joined output.
+UTC: `period_close_ts` (tz-aware `America/New_York`, canonicalized in the
+fetcher) is converted to UTC and compared with `published_at` (already UTC).
+
+The bfill index is built **from the prices store's actual
+`period_close_ts` values** (sorted, de-duplicated, in UTC) -- NOT from the
+XNYS schedule for the loader window. This guarantees every bound
+`period_close_ts` is a real key in `prices.parquet` (no phantom foreign
+keys). The `published_at_guard` diagnostic includes an FK integrity check
+(every joined `period_close_ts` must exist in the prices store) which is
+asserted on every CLI run.
+
+### Under-inclusion at window edges
+
+Because the binding index is restricted to sessions that actually exist in
+`prices.parquet`, an article published after the last stored session close
+(e.g. Friday 17:00 ET when the store covers through Friday's close) is
+**dropped** from the joined output. This is **under-inclusion, NOT leakage**
+-- no future information is leaked into a feature row; the article simply
+finds no period to bind to within the stored coverage. The loader logs the
+drop count. If you need edge articles bound, re-fetch prices for a wider
+window; do not extend the join window with a schedule-derived +1-day tail
+(that produces phantom FKs, which the guard rejects).
+
+Both `period_close_ts` and `published_at` are written to
+`articles_joined.parquet` canonicalized to **UTC** (downstream S2+ slices can
+compare them without tz juggling).
 
 ### Holiday roll-forward
 
@@ -200,11 +271,24 @@ already encodes the NYSE holiday calendar.
 
 ### `published_at_guard` leakage diagnostic
 
-`equity/diagnostics/published_at_guard.py` asserts
-`published_at <= period_close_ts` for every joined row. A violation means
-an article was assigned to a period that closed BEFORE the article was
-published -- i.e. the join leaked future information into that period's
-feature row. Run as a module:
+`equity/diagnostics/published_at_guard.py` is a **join-invariant sanity
+check, not a feed-side leakage detector**. It asserts three invariants on
+the joined frame:
+
+1. **Right-hand side** -- `published_at <= period_close_ts` for every row.
+   This holds by construction for the bfill-derived join; the check catches
+   regressions (e.g. a switch to `method='ffill'`) and downstream tampering.
+   It does NOT detect feed-side backdating (a feed that backdates
+   `published_at` cannot be caught here -- the value is already a canonical
+   UTC timestamp by the time the join runs).
+2. **Left-hand side** -- `period_close(P-1) < published_at` (the previous
+   stored session close is strictly before `published_at`, OR the row is the
+   first stored session). Catches an `ffill` regression where an article is
+   wrongly bound to the earlier session.
+3. **Foreign-key integrity** (when `--prices` is provided): every
+   `period_close_ts` in the joined frame must exist in the prices store.
+
+Run as a module:
 
 ```bash
 python -m equity.diagnostics.published_at_guard --joined <articles_joined.parquet>
