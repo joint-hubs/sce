@@ -1,13 +1,14 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-27** (FOC-48 slice S1 — equity data-acquisition package, on review branch)
+> Last update: **2026-07-27** (FOC-48 slice S1 — equity data-acquisition package, TEST PASSED, ready to merge)
 
 ## Equity forecasting pipeline (FOC-47/48) — branch `foc-48-s1-data-acquisition`
 
 **Status (2026-07-27):** Slice S1 (Data acquisition + canonical schema) IMPLEMENTED
-on feature branch `foc-48-s1-data-acquisition` (NOT merged to main; in Linear
-review). 3 commits: `61c39db` (S1.1), `fa9351b` (S1.2), `70824f2` (S1.3).
+on feature branch `foc-48-s1-data-acquisition` (NOT merged to main; **review r3
+clean + TEST PASS** — ready to merge). 5 commits: `61c39db` (S1.1), `fa9351b`
+(S1.2), `70824f2` (S1.3), `5452ec9` (R1 fixes), `6704e90` (R2 fixes).
 
 New sibling package `equity/` (independent of `sce/`, mirrors `sce/io` registry
 pattern; NOT imported into `sce/`):
@@ -37,9 +38,13 @@ pattern; NOT imported into `sce/`):
   equity deps. `equity/` has no separate `__version__` (bundled into the
   stat-context wheel).
 
-**Tests:** `tests/equity/` — 37 passed + 2 skipped (live yfinance + Kaggle
+**Tests:** `tests/equity/` — 81 passed + 2 skipped (live yfinance + Kaggle
 integration tests gated by `SCE_EQUITY_LIVE_TEST=1`; no network on default run).
-Regression on `sce` (io + models): green.
+Full pytest: 204 passed + 2 skipped (25.8s); `equity/` cov 88% (no file <82%):
+guard 82%, loader 86%, schema 92%. `published_at_guard` exits 1 on PIT-join
+violation (synthetic gap=7200s → exit 1, RESULT_PASS=False). Regression on
+`sce` (io + models): green. TEST PASS 2026-07-27 on
+`foc-48-s1-data-acquisition@6704e90`.
 
 **Decisions locked (GATE 1, PRD `docs/plan/2026-07-27_trading_forecaster_prd.md`):**
 Q1 S&P 500 · Q2 `ret_1d` SCE target · Q3 free RSS first · Q4 interaction
