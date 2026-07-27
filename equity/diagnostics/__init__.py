@@ -19,7 +19,15 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
         )
 
         return run_sentiment_aggregate_guard
+    if name == "run_lookahead_indicator":
+        from equity.diagnostics.lookahead_indicator import run_lookahead_indicator
+
+        return run_lookahead_indicator
     raise AttributeError(f"module 'equity.diagnostics' has no attribute {name!r}")
 
 
-__all__ = ["run_published_at_guard", "run_sentiment_aggregate_guard"]
+__all__ = [
+    "run_published_at_guard",
+    "run_sentiment_aggregate_guard",
+    "run_lookahead_indicator",
+]
