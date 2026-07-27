@@ -160,4 +160,75 @@ def fetch_yfinance_ohlcv(
     return long_df[CANONICAL_PRICE_COLUMNS]
 
 
-__all__ = ["fetch_yfinance_ohlcv"]
+# ---------------------------------------------------------------------------
+# S1.3: articles ingestion (seed-based; NO network)
+# ---------------------------------------------------------------------------
+
+from pathlib import Path
+
+from equity.data.schema import ARTICLE_TZ, CANONICAL_ARTICLE_COLUMNS
+
+
+def _empty_articles_canonical() -> pd.DataFrame:
+    """Return an empty DataFrame with the canonical articles columns."""
+    return pd.DataFrame(columns=CANONICAL_ARTICLE_COLUMNS)
+
+
+def fetch_articles_from_seed(seed_path: str | Path) -> pd.DataFrame:
+    """Load articles from a committed seed CSV and coerce ``published_at`` to
+    tz-aware UTC.
+
+    The seed CSV has the header ``ticker,published_at,text,source`` and an
+    optional ``#`` comment line documenting its semantics. ``published_at`` is
+    parsed as ISO-8601 (with or without a trailing ``Z`` / offset); values that
+    carry an offset are converted to UTC, values that are tz-naive are localized
+    to UTC. The output frame has the 4 canonical columns in order (see
+    :data:`equity.data.schema.CANONICAL_ARTICLE_COLUMNS`).
+
+    This function performs **no schema validation** -- the caller (typically
+    :meth:`EquityDataLoader.fetch_articles`) runs
+    :func:`equity.data.schema.validate_articles` before writing the parquet
+    store.
+
+    Parameters
+    ----------
+    seed_path:
+        Path to the seed CSV (e.g. ``configs/equity/articles_seed.csv``).
+
+    Returns
+    -------
+    pd.DataFrame
+        Long-form frame with the canonical 4 columns;
+        ``published_at`` is tz-aware ``UTC``. Returns an empty canonical
+        frame if the seed contains only a header / comment lines.
+    """
+    path = Path(seed_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Articles seed file not found: {path}")
+    raw = pd.read_csv(path, comment="#")
+    if raw.empty:
+        return _empty_articles_canonical()
+    for col in ("ticker", "published_at", "text", "source"):
+        if col not in raw.columns:
+            raise ValueError(
+                f"Articles seed '{path.name}' missing required column '{col}'."
+            )
+    out = pd.DataFrame(
+        {
+            "ticker": raw["ticker"].astype(str),
+            # pd.to_datetime with utc=True parses mixed-aware/naive ISO strings
+            # and returns a tz-aware UTC Series. Strings already carrying an
+            # offset (e.g. "...+00:00") are converted; tz-naive strings are
+            # localized to UTC.
+            "published_at": pd.to_datetime(raw["published_at"], utc=True),
+            "text": raw["text"].astype(object),
+            "source": raw["source"].astype(str),
+        }
+    )
+    # Force the exact canonical dtype (pd.to_datetime(utc=True) yields
+    # datetime64[ns, UTC]; the explicit astype is a no-op / idempotent guard).
+    out["published_at"] = out["published_at"].astype(pd.DatetimeTZDtype(tz=ARTICLE_TZ))
+    return out[CANONICAL_ARTICLE_COLUMNS]
+
+
+__all__ = ["fetch_yfinance_ohlcv", "fetch_articles_from_seed"]

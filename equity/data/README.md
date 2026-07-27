@@ -134,14 +134,95 @@ Both gated tests SKIP on a default `pytest` run (no network, no creds needed).
 
 ## Notes for S1.3 (point-in-time text join)
 
-- `period_close_ts` is tz-aware `America/New_York` session close; S1.3's
-  `published_at` should be compared in the same tz (or normalized) to avoid
-  off-by-one joins across DST transitions.
-- Read-back frame has 11 columns (9 canonical + `year` + `month` partition
-  keys); S1.3 should select the 9 canonical columns explicitly.
-- The alive-ticker filter (`loader.universe()`) is the same set S1.3 will
-  join against; delisted-during-window tickers are included with partial
-  bars (NaN OHLCV), which S1.3 must tolerate.
-- Historical source for S1.3's backfill is the Cam Nugent dataset
-  (`camnugent/sandp500`); the gated test in this slice exercises the
-  normalization path S1.3 will reuse.
+S1.3 status: **implemented**. See the new "Point-in-time text join (S1.3)"
+section below. The slice ships:
+
+- `articles_schema` / `validate_articles` / `assert_articles_primary_key_unique`
+  in `equity.data.schema` (mirrors the prices schema pattern).
+- `fetch_articles_from_seed` in `equity.data.fetch` (NO network; live
+  RSS/Kaggle ingestion is S7).
+- `EquityDataLoader.fetch_articles` + `EquityDataLoader.join_articles_to_prices`
+  in `equity.data.loader`.
+- `equity.diagnostics.published_at_guard` leakage guard CLI.
+- `[articles]` section in `configs/equity/sp500.toml` and a committed seed
+  CSV at `configs/equity/articles_seed.csv`.
+
+## Point-in-time text join (S1.3)
+
+The articles layer binds raw news text to price periods so downstream
+(slices S2+) cannot accidentally train on information that was not yet
+available. The canonical articles frame is 4 data columns:
+
+| column         | dtype                          | nullable | notes                                                       |
+|----------------|--------------------------------|----------|-------------------------------------------------------------|
+| `ticker`       | `str`                          | no       | e.g. `AAPL`; rows with NaN ticker are dropped before join   |
+| `published_at` | `datetime64[ns, UTC]`          | no       | **tz-aware UTC** (canonical storage tz)                     |
+| `text`         | `str`                          | yes      | nullable -- some sources ship headline-only payloads        |
+| `source`       | `str`                          | no       | e.g. `reuters`, `bloomberg`                                 |
+
+Primary key: `(ticker, published_at, source)` -- dedup the same article from
+the same source. Enforced by
+`equity.data.schema.assert_articles_primary_key_unique`.
+
+### Canonical storage timezone: UTC
+
+`published_at` is stored as `DatetimeTZDtype(tz="UTC")` everywhere. RSS and
+Kaggle feeds publish in UTC; `pd.Timestamp(...).tz_convert("UTC")` is
+idempotent for already-UTC timestamps, and `pd.to_datetime(..., utc=True)`
+handles mixed-aware / tz-naive ISO strings in the seed loader. We never
+store wall-clock ET for `published_at`: the price-side
+`period_close_ts` (America/New_York) is converted to UTC for the comparison
+(see "Join rule" below), so the inequality is DST-safe -- no wall-clock
+arithmetic across DST transitions.
+
+### Join rule
+
+An article is bound to trading period `P` iff:
+
+    period_close(P-1) < published_at <= period_close(P)
+
+where `period_close` is the NYSE session close from
+`pandas_market_calendars`'s `"XNYS"` calendar (16:00 ET for normal sessions,
+13:00 ET for early-close sessions). The comparison is performed entirely in
+UTC: `period_close_ts` (tz-aware `America/New_York`) is converted to UTC and
+compared with `published_at` (already UTC). An article that cannot be bound
+to any session in the loader's `[start, end]` window (e.g. published after
+the last session close) is dropped from the joined output.
+
+### Holiday roll-forward
+
+Holiday / weekend roll-forward is implicit in the XNYS schedule: the
+calendar simply omits non-trading days. An article published on
+2024-07-04 (US Independence Day holiday) binds to the NEXT trading session
+(2024-07-05); an article published on 2024-07-06 (Saturday) binds to
+2024-07-08 (Monday). No special-case code is needed -- the XNYS schedule
+already encodes the NYSE holiday calendar.
+
+### `published_at_guard` leakage diagnostic
+
+`equity/diagnostics/published_at_guard.py` asserts
+`published_at <= period_close_ts` for every joined row. A violation means
+an article was assigned to a period that closed BEFORE the article was
+published -- i.e. the join leaked future information into that period's
+feature row. Run as a module:
+
+```bash
+python -m equity.diagnostics.published_at_guard --joined <articles_joined.parquet>
+# or, when a pre-joined file does not exist yet:
+python -m equity.diagnostics.published_at_guard --prices <prices_dir> --articles <articles_dir>
+```
+
+The CLI writes a JSON result (pass / n_violations / violations / n_checked)
+under `results/diagnostics/equity/` and exits with code **0 on PASS, 1 on
+any violation**. This diverges from the rest of SCE's `scripts/diagnostics/`
+family, which rely on uncaught exceptions for failure -- the DoD for S1.3
+requires a non-zero exit on a synthetic injected violation.
+
+### S2 hand-off (market-wide sentiment aggregate -- NOT in S1.3)
+
+S1.3 ships only the raw `articles.parquet` store and the point-in-time
+join. The market-wide sentiment aggregate (rolling sentiment index across
+the universe, used as a feature in S2 model inputs) is **S2 work** and is
+NOT implemented here. Downstream slices should consume
+`articles_joined.parquet` (ticker, period_close_ts, published_at, text,
+source) and compute sentiment features per their own definitions.

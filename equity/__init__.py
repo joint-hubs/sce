@@ -9,7 +9,7 @@
 from equity.data.loader import EquityDataLoader
 from equity.data.registry import UniverseInfo, get_universe_info, list_universes
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "EquityDataLoader",
     "UniverseInfo",

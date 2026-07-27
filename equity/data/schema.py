@@ -135,10 +135,118 @@ def assert_primary_key_unique(df: pd.DataFrame) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# S1.3: articles schema (point-in-time text layer)
+# ---------------------------------------------------------------------------
+
+# Canonical column order for articles.parquet. The 4 data columns below are the
+# data columns; ``year``/``month`` Hive partition keys are added on write (see
+# ``EquityDataLoader.fetch_articles``).
+CANONICAL_ARTICLE_COLUMNS: list[str] = [
+    "ticker",
+    "published_at",
+    "text",
+    "source",
+]
+
+# Canonical storage timezone for ``published_at``. RSS/Kaggle feeds publish in
+# UTC; ``pd.Timestamp(...).tz_convert("UTC")`` is idempotent for already-UTC
+# timestamps. We store the column as ``DatetimeTZDtype(tz="UTC")`` everywhere
+# and compare with the price-side ``period_close_ts`` (America/New_York) in
+# UTC -- see ``join_articles_to_prices``.
+ARTICLE_TZ = "UTC"
+
+# Pandera schema for the canonical articles frame.
+#
+# ``ticker`` and ``source`` are non-null strings; ``published_at`` is a
+# tz-aware UTC datetime (the primary guard against point-in-time leakage);
+# ``text`` is nullable (some sources ship a headline-only payload). The
+# ``ticker``/``published_at``/``source`` triple is the primary key and is
+# enforced separately by :func:`assert_articles_primary_key_unique`.
+articles_schema: pa.DataFrameSchema = pa.DataFrameSchema(
+    {
+        "ticker": pa.Column(str, coerce=True),
+        "published_at": pa.Column(
+            pd.DatetimeTZDtype(tz=ARTICLE_TZ),
+            coerce=False,
+        ),
+        "text": pa.Column(str, nullable=True, coerce=True),
+        "source": pa.Column(str, coerce=True),
+    },
+    strict=True,
+    coerce=False,
+)
+
+
+def validate_articles(df: pd.DataFrame) -> pd.DataFrame:
+    """Validate an articles DataFrame against :data:`articles_schema` and the
+    tz-awareness rule on ``published_at``.
+
+    Parameters
+    ----------
+    df:
+        Long-form DataFrame with the canonical 4 columns (see
+        :data:`CANONICAL_ARTICLE_COLUMNS`).
+
+    Returns
+    -------
+    pd.DataFrame
+        The validated, coerced DataFrame.
+
+    Raises
+    ------
+    pandera.errors.SchemaError
+        On schema violations (missing/extra columns, wrong dtype, etc.).
+        Tz-naive ``published_at`` fails here via the ``DatetimeTZDtype``
+        dtype check.
+    ValueError
+        If ``published_at`` is empty-but-tz-naive (defensive guard; the dtype
+        check is the primary guard for non-empty frames).
+    """
+    validated = articles_schema.validate(df)
+    # Defensive tz-awareness guard. The dtype check above already rejects
+    # tz-naive non-empty frames; this handles edge cases and documents intent.
+    if not validated.empty:
+        ts = validated["published_at"]
+        if ts.dt.tz is None:
+            raise ValueError(
+                f"published_at must be timezone-aware ({ARTICLE_TZ}). "
+                "Received tz-naive timestamps; RSS/Kaggle feeds publish in "
+                "UTC -- check the seed loader / fetch wrapper."
+            )
+    return validated
+
+
+def assert_articles_primary_key_unique(df: pd.DataFrame) -> None:
+    """Assert ``(ticker, published_at, source)`` is unique in ``df``.
+
+    This is the primary key of ``articles.parquet`` (dedup same article from
+    same source). Raises :class:`ValueError` with a small sample of
+    duplicates on failure. No-op on empty frames.
+    """
+    if df.empty:
+        return
+    dup_mask = df.duplicated(subset=["ticker", "published_at", "source"], keep=False)
+    if dup_mask.any():
+        dups = df.loc[
+            dup_mask, ["ticker", "published_at", "source"]
+        ].head(5)
+        raise ValueError(
+            f"Primary key (ticker, published_at, source) has "
+            f"{int(dup_mask.sum())} duplicate rows. First 5:\n"
+            f"{dups.to_string(index=False)}"
+        )
+
+
 __all__ = [
     "CANONICAL_PRICE_COLUMNS",
     "EXCHANGE_TZ",
     "prices_schema",
     "validate_prices",
     "assert_primary_key_unique",
+    "CANONICAL_ARTICLE_COLUMNS",
+    "ARTICLE_TZ",
+    "articles_schema",
+    "validate_articles",
+    "assert_articles_primary_key_unique",
 ]

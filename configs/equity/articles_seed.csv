@@ -1,0 +1,13 @@
+# Seed articles for S1.3 PIT-join tests. published_at is UTC ISO. Includes a
+# holiday (2024-07-04) and a weekend case. Live RSS/Kaggle ingestion is S7.
+ticker,published_at,text,source
+AAPL,2024-07-01T14:30:00+00:00,Apple announces new product line,reuters
+MSFT,2024-07-02T09:15:00+00:00,Microsoft Azure revenue beats,bloomberg
+AAPL,2024-07-03T17:00:00+00:00,Apple pre-holiday session note,reuters
+MSFT,2024-07-04T16:00:00+00:00,Microsoft holiday cloud update,bloomberg
+AAPL,2024-07-05T11:00:00+00:00,Apple post-holiday analyst note,reuters
+NVDA,2024-07-06T13:00:00+00:00,NVIDIA weekend GPU roadmap,bloomberg
+AAPL,2024-07-08T10:00:00+00:00,Apple Monday open commentary,reuters
+MSFT,2024-07-08T15:00:00+00:00,Microsoft Monday close note,bloomberg
+ENRN,2024-01-15T10:00:00+00:00,Enron historical news archive,reuters
+LEH,2008-09-15T09:00:00+00:00,Lehman bankruptcy filing coverage,bloomberg
