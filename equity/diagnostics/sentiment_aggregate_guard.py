@@ -112,11 +112,16 @@ def assert_pit_safety(
 
 
 def assert_probs_sum_to_one(df: pd.DataFrame, pos: str, neg: str, neu: str) -> list[dict[str, Any]]:
-    """Return a list of prob-sum violation records."""
+    """Return a list of prob-sum violation records.
+
+    NaN is treated as a violation: NaN comparisons are always False, so a
+    NaN-producing scorer would otherwise bypass this guard silently (FOC-49
+    round-3 review blocker).
+    """
     if df.empty:
         return []
     total = df[pos].to_numpy() + df[neg].to_numpy() + df[neu].to_numpy()
-    bad = (total < 1.0 - _PROB_SUM_TOL) | (total > 1.0 + _PROB_SUM_TOL)
+    bad = (total < 1.0 - _PROB_SUM_TOL) | (total > 1.0 + _PROB_SUM_TOL) | np.isnan(total)
     violations: list[dict[str, Any]] = []
     if bad.any():
         for i in df.index[bad][:5]:
@@ -256,6 +261,40 @@ def assert_aggregate_reproducible(
         grouped[(str(ticker), pd.Timestamp(period_close))] = group
 
     violations: list[dict[str, Any]] = []
+    # Build the set of (ticker, period_close_ts) keys present in per_period
+    # so we can detect REMOVED rows (FOC-49 round-3 review fix). A regression
+    # that silently drops a group from per_period would otherwise pass: every
+    # remaining row re-derives cleanly, and the missing group is never
+    # iterated. We compute the expected set from per_article (after the same
+    # null-ticker + PIT filtering the aggregator applies) and report any group
+    # present in per_article but absent from per_period.
+    per_period_keys: set[tuple[str, pd.Timestamp]] = set()
+    for _, row in per_period.iterrows():
+        t = str(row["ticker"])
+        pc = pd.Timestamp(row["period_close_ts"])
+        if pc.tz is None:
+            pc = pc.tz_localize("UTC")
+        else:
+            pc = pc.tz_convert("UTC")
+        per_period_keys.add((t, pc))
+
+    for key, group in grouped.items():
+        if key not in per_period_keys:
+            violations.append(
+                {
+                    "type": "aggregate_reproducibility",
+                    "ticker": key[0],
+                    "period_close_ts": key[1].isoformat(),
+                    "reason": (
+                        "per_article has rows for this (ticker, period_close_ts) "
+                        "but per_period is missing the corresponding row "
+                        "(group was silently dropped by the aggregator)"
+                    ),
+                    "expected_n_articles": int(len(group)),
+                    "rederived_n_articles": 0,
+                }
+            )
+
     for _, row in per_period.iterrows():
         ticker = str(row["ticker"])
         period_close = pd.Timestamp(row["period_close_ts"])
@@ -274,6 +313,23 @@ def assert_aggregate_reproducible(
                     "reason": "no per_article rows for this (ticker, period_close_ts)",
                     "expected_n_articles": int(row["n_articles"]),
                     "rederived_n_articles": 0,
+                }
+            )
+            continue
+        # NaN check (FOC-49 round-3 review blocker): a NaN in per_article
+        # score/pos/neg/neu would produce NaN re-derived values, and NaN
+        # comparisons are always False -> the reproducibility check would
+        # silently PASS. Report as a violation instead.
+        nan_cols = [c for c in ("score", "pos", "neg", "neu") if group[c].isna().any()]
+        if nan_cols:
+            violations.append(
+                {
+                    "type": "aggregate_reproducibility",
+                    "ticker": ticker,
+                    "period_close_ts": period_close.isoformat(),
+                    "reason": f"per_article has NaN in columns: {nan_cols}",
+                    "expected_n_articles": int(row["n_articles"]),
+                    "rederived_n_articles": int(len(group)),
                 }
             )
             continue

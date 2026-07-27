@@ -63,11 +63,18 @@ rule (``period_close(P-1) < published_at <= period_close(P)``) via
 :meth:`EquityDataLoader.join_articles_to_prices` exactly, so per-ticker and
 market-wide aggregates use the same period assignment.
 
-If ``pandas_market_calendars`` is unavailable (e.g. minimal install), the
-market-wide aggregator falls back to grouping ``articles_joined.parquet``
-by ``period_close_ts`` (pooling all resolved tickers) -- documented in the
-caller's docstring. This fallback LOSES the unresolved-ticker articles but
-keeps the rest of the pipeline functional.
+``pandas_market_calendars`` is a HARD dependency for the market-wide
+aggregation path (used by :func:`build_market_wide_per_article` /
+:func:`_build_xnys_schedule` to assign each article to an XNYS session
+close). It is NOT needed for the per-ticker path
+(:func:`aggregate_per_period`), which consumes ``period_close_ts`` already
+assigned by S1.3's ``articles_joined.parquet``. A minimal install without
+``pandas_market_calendars`` will raise ``ImportError`` at first call to
+:func:`_build_xnys_schedule`; install the package (it is listed in the
+project's runtime dependencies) to enable the market-wide path. A
+hand-rolled fallback XNYS schedule is intentionally NOT provided -- the
+NYSE session logic (half-days, holidays, early closes) is non-trivial and
+an incorrect fallback would introduce its own PIT bugs.
 """
 
 from __future__ import annotations
@@ -137,10 +144,23 @@ def _assign_period_via_bfill(
 
 
 def _weighted_mean(values: np.ndarray, weights: np.ndarray) -> float:
-    """Return ``sum(w * v) / sum(w)`` (or 0.0 when ``sum(w) == 0``)."""
+    """Return ``sum(w * v) / sum(w)`` (or 0.0 when ``sum(w) == 0``).
+
+    Raises ``ValueError`` if ``values`` contains NaN -- a NaN-producing
+    scorer would otherwise silently propagate NaN through the weighted mean,
+    bypassing the comparison-based guard invariants (FOC-49 round-3 review
+    blocker). The schema's ``nullable=False`` on probability/score columns
+    is the primary defense; this is defense-in-depth.
+    """
     total_w = float(weights.sum())
     if total_w == 0.0:
         return 0.0
+    if np.isnan(values).any():
+        raise ValueError(
+            "NaN in values passed to _weighted_mean; the aggregator must "
+            "reject NaN scores upstream via schema validation "
+            "(nullable=False on probability/score columns)."
+        )
     return float((weights * values).sum() / total_w)
 
 
@@ -177,7 +197,7 @@ def _aggregate_period_only(
     decay_time_const_days: float,
     *,
     drop_zero_weight: bool = False,
-) -> dict[str, float | int]:
+) -> dict[str, float | int] | None:
     """Compute the weighted-mean aggregate for ONE period's group.
 
     Shared by per-ticker aggregation (:func:`aggregate_per_period`) and
@@ -193,11 +213,21 @@ def _aggregate_period_only(
     very-old articles with ``w ~= 0`` would otherwise inflate
     ``n_articles`` without contributing to the score, misrepresenting the
     period's effective sample size.
+
+    Returns ``None`` when ``drop_zero_weight`` is True AND every row in the
+    group has weight ``<= 1e-6`` (i.e. ``n_articles == 0`` after the
+    zero-weight mask). In that case the period has NO contributing articles,
+    so the market-wide aggregator must SKIP emitting a row (an all-zero
+    0/0/0 row would trip the prob-sum invariant with a misleading error --
+    FOC-49 round-3 review fix). The per-ticker path never sets
+    ``drop_zero_weight`` and thus never returns ``None``.
     """
     weights = _compute_weights(period_close, group["published_at"], decay_time_const_days)
     if drop_zero_weight:
         mask = weights > 1e-6
         n_articles = int(mask.sum())
+        if n_articles == 0:
+            return None
 
         def wm(values: np.ndarray) -> float:
             return _weighted_mean(np.asarray(values)[mask], weights[mask])
@@ -367,6 +397,12 @@ def aggregate_market_wide(
         agg = _aggregate_period_only(
             group, period_close, decay_time_const_days, drop_zero_weight=True
         )
+        # When every article in this period has w <= 1e-6, the aggregate is
+        # empty -> skip emitting a row (FOC-49 round-3 review fix). An
+        # all-zero 0/0/0 row would trip the prob-sum invariant with a
+        # misleading error.
+        if agg is None:
+            continue
         rows.append(
             {
                 "period_close_ts": period_close,

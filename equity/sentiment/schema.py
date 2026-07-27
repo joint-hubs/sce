@@ -29,6 +29,7 @@ enforced by :func:`validate_sentiment_per_article` /
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 
@@ -90,11 +91,16 @@ def _assert_probs_sum_to_one(df: pd.DataFrame, pos: str, neg: str, neu: str) -> 
     Defensive guard -- FinBERT softmax / VADER polarity scores sum to 1 by
     construction; a violation here indicates a corrupted cache or a custom
     scorer returning unnormalized probabilities. No-op on empty frames.
+
+    NaN is treated as a violation: a NaN-producing scorer would otherwise
+    bypass the comparison (NaN comparisons are always False) and silently
+    propagate NaN downstream, defeating the PIT guard invariants (FOC-49
+    round-3 review blocker).
     """
     if df.empty:
         return
     total = df[pos].to_numpy() + df[neg].to_numpy() + df[neu].to_numpy()
-    bad_mask = (total < 1.0 - _PROB_SUM_TOL) | (total > 1.0 + _PROB_SUM_TOL)
+    bad_mask = (total < 1.0 - _PROB_SUM_TOL) | (total > 1.0 + _PROB_SUM_TOL) | np.isnan(total)
     if bad_mask.any():
         bad_idx = df.index[bad_mask][:5].tolist()
         sample = df.loc[bad_idx, [pos, neg, neu]].to_dict("records")
@@ -113,10 +119,13 @@ sentiment_per_article_schema: pa.DataFrameSchema = pa.DataFrameSchema(
         "article_key": pa.Column(str, coerce=True),
         "model_name": pa.Column(str, coerce=True),
         "model_revision": pa.Column(str, coerce=True),
-        "pos": pa.Column(float, coerce=True),
-        "neg": pa.Column(float, coerce=True),
-        "neu": pa.Column(float, coerce=True),
-        "score": pa.Column(float, coerce=True),
+        # nullable=False: a NaN-producing scorer must be rejected at schema
+        # validation, not just by the prob-sum custom check (FOC-49 round-3
+        # review blocker -- NaN bypasses the comparison-based guard).
+        "pos": pa.Column(float, coerce=True, nullable=False),
+        "neg": pa.Column(float, coerce=True, nullable=False),
+        "neu": pa.Column(float, coerce=True, nullable=False),
+        "score": pa.Column(float, coerce=True, nullable=False),
     },
     strict=True,
     coerce=False,
@@ -162,10 +171,12 @@ sentiment_per_period_schema: pa.DataFrameSchema = pa.DataFrameSchema(
             pd.DatetimeTZDtype(tz=SENTIMENT_TZ),
             coerce=False,
         ),
-        "sentiment_score": pa.Column(float, coerce=True),
-        "sentiment_pos": pa.Column(float, coerce=True),
-        "sentiment_neg": pa.Column(float, coerce=True),
-        "sentiment_neu": pa.Column(float, coerce=True),
+        # nullable=False on probabilities + score: NaN must not silently
+        # propagate downstream (FOC-49 round-3 review blocker).
+        "sentiment_score": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_pos": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_neg": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_neu": pa.Column(float, coerce=True, nullable=False),
         "n_articles": pa.Column(int, coerce=True),
     },
     strict=True,
@@ -213,10 +224,11 @@ market_wide_schema: pa.DataFrameSchema = pa.DataFrameSchema(
             pd.DatetimeTZDtype(tz=SENTIMENT_TZ),
             coerce=False,
         ),
-        "sentiment_score": pa.Column(float, coerce=True),
-        "sentiment_pos": pa.Column(float, coerce=True),
-        "sentiment_neg": pa.Column(float, coerce=True),
-        "sentiment_neu": pa.Column(float, coerce=True),
+        # nullable=False on probabilities + score (FOC-49 round-3 review blocker).
+        "sentiment_score": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_pos": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_neg": pa.Column(float, coerce=True, nullable=False),
+        "sentiment_neu": pa.Column(float, coerce=True, nullable=False),
         "n_articles": pa.Column(int, coerce=True),
     },
     strict=True,

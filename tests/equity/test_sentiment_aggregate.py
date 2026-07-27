@@ -373,6 +373,64 @@ def test_aggregate_market_wide_drops_zero_weight_articles_from_n_articles():
     assert row["sentiment_neu"] == pytest.approx(0.1, abs=1e-9)
 
 
+def test_aggregate_market_wide_skips_period_when_all_articles_zero_weight():
+    """FOC-49 round-3: when EVERY article in a period has w <= 1e-6 (e.g. all
+    articles >= ~69 days old), the market-wide aggregator must SKIP emitting
+    a row for that period -- NOT emit a degenerate 0/0/0 row that trips the
+    prob-sum invariant with a misleading error.
+    """
+    period_close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    # All articles >= 100 days old -> w = exp(-100/5) ~= 1.9e-9 < 1e-6.
+    df = pd.DataFrame(
+        {
+            "ticker": ["A", "B"],
+            "published_at": [
+                pd.Timestamp("2024-07-08 20:00", tz="UTC") - pd.Timedelta(days=100),
+                pd.Timestamp("2024-07-08 20:00", tz="UTC") - pd.Timedelta(days=120),
+            ],
+            "period_close_ts": [period_close, period_close],
+            "pos": [0.7, 0.6],
+            "neg": [0.2, 0.3],
+            "neu": [0.1, 0.1],
+            "score": [0.5, 0.4],
+        }
+    )
+    out = aggregate_market_wide(df, decay_time_const_days=DEFAULT_DECAY_TIME_CONST_DAYS)
+    # No row emitted for the all-zero-weight period -> empty result, no crash,
+    # no misleading prob-sum error.
+    assert len(out) == 0
+    assert list(out.columns) == CANONICAL_MARKET_WIDE_COLUMNS
+
+
+def test_aggregate_market_wide_skips_only_empty_periods_keeps_others():
+    """FOC-49 round-3: a mix of an all-zero-weight period and a contributing
+    period -- only the contributing period emits a row."""
+    recent_close = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    stale_close = pd.Timestamp("2024-07-09 20:00", tz="UTC")
+    df = pd.DataFrame(
+        {
+            "ticker": ["A", "B", "C"],
+            "published_at": [
+                pd.Timestamp("2024-07-08 18:00", tz="UTC"),  # recent, recent_close
+                pd.Timestamp("2024-07-09 20:00", tz="UTC") - pd.Timedelta(days=100),  # stale
+                pd.Timestamp("2024-07-09 20:00", tz="UTC") - pd.Timedelta(days=120),  # stale
+            ],
+            "period_close_ts": [recent_close, stale_close, stale_close],
+            "pos": [0.7, 0.6, 0.5],
+            "neg": [0.2, 0.3, 0.4],
+            "neu": [0.1, 0.1, 0.1],
+            "score": [0.5, 0.4, 0.3],
+        }
+    )
+    out = aggregate_market_wide(df, decay_time_const_days=DEFAULT_DECAY_TIME_CONST_DAYS)
+    # Only the recent period (recent_close) emits a row; the stale period is
+    # skipped entirely.
+    assert len(out) == 1
+    assert out.iloc[0]["period_close_ts"] == recent_close
+    assert out.iloc[0]["n_articles"] == 1
+    assert out.iloc[0]["sentiment_score"] == pytest.approx(0.5, abs=1e-9)
+
+
 def test_aggregate_per_period_missing_columns_raises():
     df = pd.DataFrame({"ticker": [], "published_at": []})
     with pytest.raises(ValueError, match="missing required columns"):

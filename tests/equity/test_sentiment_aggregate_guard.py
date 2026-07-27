@@ -11,6 +11,7 @@ import json
 import subprocess
 import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -475,6 +476,111 @@ def test_guard_reproducibility_skipped_when_per_article_empty():
     prob-sum check still runs and the result is pass.
     """
     result = run_sentiment_aggregate_guard(pd.DataFrame(), _valid_per_period())
+    assert result["pass"] is True
+    assert not any(v["type"] == "aggregate_reproducibility" for v in result["violations"])
+
+
+# ---------------------------------------------------------------------------
+# FOC-49 round-3: NaN guard + missing-row reproducibility
+# ---------------------------------------------------------------------------
+
+
+def test_guard_detects_nan_in_per_period_probabilities():
+    """FOC-49 round-3 blocker: a NaN in per_period sentiment_pos must be
+    flagged as a prob_sum_violation (NaN comparisons are always False -- the
+    guard adds np.isnan to bad_mask). Without the fix, NaN would bypass the
+    guard silently.
+    """
+    per_period = _valid_per_period().copy()
+    per_period.loc[0, "sentiment_pos"] = np.nan
+    result = run_sentiment_aggregate_guard(_valid_per_article(), per_period)
+    assert result["pass"] is False
+    assert any(v["type"] == "prob_sum_violation" for v in result["violations"])
+
+
+def test_guard_detects_nan_in_per_article_scores():
+    """FOC-49 round-3: a NaN in per_article score/pos/neg/neu must propagate
+    to a guard failure (NOT silently pass). Without the fix, the re-derived
+    values would be NaN, and NaN comparisons are always False -> the
+    reproducibility check would silently PASS. The guard now checks for NaN
+    in the per_article group and reports an aggregate_reproducibility
+    violation.
+    """
+    pa = _valid_per_article().copy()
+    pa.loc[0, "score"] = np.nan
+    result = run_sentiment_aggregate_guard(pa, _valid_per_period())
+    assert result["pass"] is False
+    repro = [v for v in result["violations"] if v["type"] == "aggregate_reproducibility"]
+    assert len(repro) >= 1
+    assert "NaN" in repro[0]["reason"]
+
+
+def test_guard_detects_missing_per_period_row():
+    """FOC-49 round-3: a per_period frame missing a (ticker, period_close_ts)
+    row that IS derivable from per_article must FAIL the reproducibility
+    check. Without the fix, the re-derive loop only iterates per_period rows
+    -- a silently-dropped group is never detected.
+    """
+    # Build per_article with TWO (ticker, period_close_ts) groups.
+    period_close_a = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    period_close_b = pd.Timestamp("2024-07-09 20:00", tz="UTC")
+    pa = pd.DataFrame(
+        {
+            "ticker": ["AAPL", "AAPL", "MSFT", "MSFT"],
+            "published_at": [
+                pd.Timestamp("2024-07-08 18:00", tz="UTC"),
+                pd.Timestamp("2024-07-08 12:00", tz="UTC"),
+                pd.Timestamp("2024-07-09 18:00", tz="UTC"),
+                pd.Timestamp("2024-07-09 12:00", tz="UTC"),
+            ],
+            "period_close_ts": [period_close_a, period_close_a, period_close_b, period_close_b],
+            "pos": [0.7, 0.5, 0.6, 0.4],
+            "neg": [0.2, 0.3, 0.3, 0.5],
+            "neu": [0.1, 0.2, 0.1, 0.1],
+            "score": [0.5, 0.2, 0.3, -0.1],
+        }
+    )
+    # Build the faithful per_period, then DROP the MSFT row (silently dropped
+    # by a hypothetical aggregator regression).
+    full_per_period = aggregate_per_period(pa)
+    assert len(full_per_period) == 2  # sanity: AAPL + MSFT
+    # Drop the MSFT row to simulate a regression that silently drops a group.
+    dropped_per_period = full_per_period[full_per_period["ticker"] == "AAPL"].copy()
+    assert len(dropped_per_period) == 1
+
+    result = run_sentiment_aggregate_guard(pa, dropped_per_period)
+    assert result["pass"] is False
+    repro = [v for v in result["violations"] if v["type"] == "aggregate_reproducibility"]
+    assert len(repro) >= 1
+    missing = [v for v in repro if "missing" in v["reason"] or "silently dropped" in v["reason"]]
+    assert len(missing) == 1
+    assert missing[0]["ticker"] == "MSFT"
+
+
+def test_guard_reproducibility_passes_when_no_rows_missing():
+    """FOC-49 round-3: sanity check -- with both groups present in per_period,
+    the missing-row detection does NOT fire a false positive.
+    """
+    period_close_a = pd.Timestamp("2024-07-08 20:00", tz="UTC")
+    period_close_b = pd.Timestamp("2024-07-09 20:00", tz="UTC")
+    pa = pd.DataFrame(
+        {
+            "ticker": ["AAPL", "AAPL", "MSFT", "MSFT"],
+            "published_at": [
+                pd.Timestamp("2024-07-08 18:00", tz="UTC"),
+                pd.Timestamp("2024-07-08 12:00", tz="UTC"),
+                pd.Timestamp("2024-07-09 18:00", tz="UTC"),
+                pd.Timestamp("2024-07-09 12:00", tz="UTC"),
+            ],
+            "period_close_ts": [period_close_a, period_close_a, period_close_b, period_close_b],
+            "pos": [0.7, 0.5, 0.6, 0.4],
+            "neg": [0.2, 0.3, 0.3, 0.5],
+            "neu": [0.1, 0.2, 0.1, 0.1],
+            "score": [0.5, 0.2, 0.3, -0.1],
+        }
+    )
+    full_per_period = aggregate_per_period(pa)
+    result = run_sentiment_aggregate_guard(pa, full_per_period)
     assert result["pass"] is True
     assert not any(v["type"] == "aggregate_reproducibility" for v in result["violations"])
 

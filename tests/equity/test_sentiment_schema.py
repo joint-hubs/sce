@@ -99,6 +99,42 @@ def test_validate_per_article_rejects_prob_sum_violation():
         validate_sentiment_per_article(df)
 
 
+def test_validate_per_article_rejects_nan_pos():
+    """FOC-49 round-3: NaN in a probability column must be rejected at
+    schema validation (nullable=False), not silently propagate downstream.
+    """
+    import numpy as np
+
+    df = _valid_per_article()
+    df.loc[0, "pos"] = np.nan
+    with pytest.raises(Exception):
+        validate_sentiment_per_article(df)
+
+
+def test_validate_per_period_rejects_nan_sentiment_pos():
+    """FOC-49 round-3: NaN in sentiment_pos must be rejected at schema
+    validation (nullable=False) -- a NaN-producing scorer would otherwise
+    bypass the prob-sum comparison guard (NaN comparisons are always False).
+    """
+    import numpy as np
+
+    df = _valid_per_period()
+    df.loc[0, "sentiment_pos"] = np.nan
+    with pytest.raises(Exception):
+        validate_sentiment_per_period(df)
+
+
+def test_validate_market_wide_rejects_nan_sentiment_score():
+    """FOC-49 round-3: NaN in sentiment_score must be rejected at schema
+    validation (nullable=False)."""
+    import numpy as np
+
+    df = _valid_market_wide()
+    df.loc[0, "sentiment_score"] = np.nan
+    with pytest.raises(Exception):
+        validate_market_wide(df)
+
+
 def test_validate_per_article_empty_passes():
     empty = pd.DataFrame(
         {
@@ -153,6 +189,26 @@ def test_validate_per_period_rejects_prob_sum_violation():
     df.loc[0, "sentiment_neg"] = 0.9  # 0.5 + 0.9 + 0.2 = 1.6
     with pytest.raises(ValueError, match="probabilities invariant"):
         validate_sentiment_per_period(df)
+
+
+def test_validate_per_period_rejects_nan_prob_sum_via_custom_check():
+    """FOC-49 round-3: even if a NaN slipped past the nullable=False schema
+    check (e.g. via a frame constructed with float dtype that pandera
+    coerces), the custom prob-sum check must flag NaN as a violation
+    (NaN comparisons are always False -- the guard adds np.isnan to bad_mask).
+    Here we test the schema path with a non-NaN prob-sum violation already
+    covered above; this test confirms the NaN path of the custom check via
+    a direct call to _assert_probs_sum_to_one."""
+    import numpy as np
+
+    from equity.sentiment.schema import _assert_probs_sum_to_one
+
+    df = _valid_per_period()
+    df.loc[0, "sentiment_pos"] = np.nan
+    # Force the row past the nullable=False schema guard by calling the
+    # custom check directly (the schema would already reject this).
+    with pytest.raises(ValueError, match="probabilities invariant"):
+        _assert_probs_sum_to_one(df, "sentiment_pos", "sentiment_neg", "sentiment_neu")
 
 
 def test_assert_per_period_pk_unique_detects_duplicates():
