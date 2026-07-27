@@ -111,6 +111,9 @@ def build_features(
     # 1. Technical indicators (past-only, per-ticker).
     feats = add_technical_features(prices, indicators=cfg)
     tech_cols = cfg.describe()
+    # Row count of the pre-merge feature frame (= len(prices) -- the technical
+    # block only adds columns). Used by the post-merge row-count guard below.
+    n_pre_merge = len(feats)
 
     # 2. LEFT-JOIN sentiment (tz-canonicalize, fill NaN -> 0 per D4).
     if sentiment_per_period is not None and not sentiment_per_period.empty:
@@ -121,19 +124,55 @@ def build_features(
         # join keys + _SENTIMENT_BASE_COLS.
         keep = ["ticker", "period_close_ts", *_SENTIMENT_BASE_COLS]
         sent = sent[[c for c in keep if c in sent.columns]]
+        # Round-1 review fix (BLOCKER 3): a LEFT-JOIN with DUPLICATE sentiment
+        # keys would silently fan-out the price rows (row count > input). The
+        # LEFT-JOIN row-count-preservation invariant ONLY holds when the right
+        # side's join keys are unique. Refuse duplicates up front.
+        n_dup = int(sent.duplicated(["ticker", "period_close_ts"]).sum())
+        if n_dup != 0:
+            raise ValueError(
+                "build_features: sentiment_per_period has "
+                f"{n_dup} duplicate (ticker, period_close_ts) keys; "
+                "LEFT-JOIN would fan-out price rows. Deduplicate the aggregate first."
+            )
         # LEFT-JOIN on (ticker, period_close_ts).
         feats = feats.merge(sent, on=["ticker", "period_close_ts"], how="left")
+        # Round-1 review fix (BLOCKER 3): post-merge row count must equal the
+        # pre-merge (input prices) row count. A LEFT-JOIN with unique right
+        # keys preserves row count; any deviation is a logic regression
+        # (e.g. an accidental many-to-many merge).
+        if len(feats) != n_pre_merge:
+            raise ValueError(
+                "build_features: post-merge row count "
+                f"({len(feats)}) != pre-merge ({n_pre_merge}); "
+                "LEFT-JOIN did not preserve the prices row count."
+            )
+        # Round-1 review fix (SUBSTANTIVE 15): disambiguate the NaN->0 fill.
+        # After the fill, ``sentiment_score=0`` is ambiguous (neutral vs no
+        # articles). Add a ``has_sentiment`` bool flag: True where the LEFT-JOIN
+        # matched a non-null sentiment row (n_articles > 0 after fill), False
+        # where the join missed (no articles). Computed BEFORE the fill for the
+        # n_articles column so the "no articles" case (NaN -> 0) is False.
+        n_articles_raw = feats["n_articles"] if "n_articles" in feats.columns else None
+        has_sentiment = (
+            (n_articles_raw.notna() & (n_articles_raw > 0))
+            if n_articles_raw is not None
+            else pd.Series(False, index=feats.index)
+        )
         # Fill NaN -> 0 for sentiment cols (D4). NaN here means "no articles
         # published for this (ticker, period)".
         for c in _SENTIMENT_BASE_COLS:
             if c in feats.columns:
                 feats[c] = feats[c].fillna(0.0)
+        feats["has_sentiment"] = has_sentiment.astype(bool)
         sentiment_cols_present = [c for c in _SENTIMENT_BASE_COLS if c in feats.columns]
     elif sentiment_per_period is not None and sentiment_per_period.empty:
         # Empty sentiment frame: still LEFT-JOIN conceptually -- add zeroed
         # sentiment columns so downstream lag layer has stable input shape.
         for c in _SENTIMENT_BASE_COLS:
             feats[c] = 0.0
+        # No sentiment anywhere -> has_sentiment=False for all rows (SUBSTANTIVE 15).
+        feats["has_sentiment"] = False
         sentiment_cols_present = list(_SENTIMENT_BASE_COLS)
     else:
         sentiment_cols_present = []

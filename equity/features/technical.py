@@ -220,6 +220,11 @@ def add_returns(prices: pd.DataFrame, *, horizons=(1, 5, 10, 21)) -> pd.DataFram
 
     ``ret_{N}d_log[t] = log(close[t-1] / close[t-1-N])`` -- uses only rows
     strictly before ``t``.
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
     """
     out = prices
     for n in horizons:
@@ -229,7 +234,13 @@ def add_returns(prices: pd.DataFrame, *, horizons=(1, 5, 10, 21)) -> pd.DataFram
 
 
 def add_sma(prices: pd.DataFrame, *, windows=(5, 10, 21, 63)) -> pd.DataFrame:
-    """Append ``sma_{N}`` columns (past-only)."""
+    """Append ``sma_{N}`` columns (past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     out = prices
     for w in windows:
         col = f"sma_{w}"
@@ -240,7 +251,13 @@ def add_sma(prices: pd.DataFrame, *, windows=(5, 10, 21, 63)) -> pd.DataFrame:
 
 
 def add_ema(prices: pd.DataFrame, *, windows=(5, 10, 21, 63)) -> pd.DataFrame:
-    """Append ``ema_{N}`` columns (past-only)."""
+    """Append ``ema_{N}`` columns (past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     out = prices
     for w in windows:
         col = f"ema_{w}"
@@ -251,7 +268,13 @@ def add_ema(prices: pd.DataFrame, *, windows=(5, 10, 21, 63)) -> pd.DataFrame:
 
 
 def add_rsi(prices: pd.DataFrame, *, period: int = 14) -> pd.DataFrame:
-    """Append ``rsi_{period}`` (past-only Wilder's RSI)."""
+    """Append ``rsi_{period}`` (past-only Wilder's RSI).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     col = f"rsi_{period}"
     return prices.assign(
         **{col: _per_ticker_shifted(prices, "close", lambda s, p=period: _rsi_naive(s, p))}
@@ -261,7 +284,13 @@ def add_rsi(prices: pd.DataFrame, *, period: int = 14) -> pd.DataFrame:
 def add_macd(
     prices: pd.DataFrame, *, fast: int = 12, slow: int = 26, signal: int = 9
 ) -> pd.DataFrame:
-    """Append ``macd``, ``macd_signal``, ``macd_hist`` (past-only)."""
+    """Append ``macd``, ``macd_signal``, ``macd_hist`` (past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     out = prices.copy()
     naive = _per_ticker_multi_col(out, lambda g: _macd_naive(g["close"], fast, slow, signal))
     for col in ("macd", "macd_signal", "macd_hist"):
@@ -270,7 +299,13 @@ def add_macd(
 
 
 def add_volatility(prices: pd.DataFrame, *, windows=(21, 63)) -> pd.DataFrame:
-    """Append ``volatility_{N}`` (rolling std of log returns, past-only)."""
+    """Append ``volatility_{N}`` (rolling std of log returns, past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     out = prices
     for w in windows:
         col = f"volatility_{w}"
@@ -281,7 +316,13 @@ def add_volatility(prices: pd.DataFrame, *, windows=(21, 63)) -> pd.DataFrame:
 
 
 def add_volume_zscore(prices: pd.DataFrame, *, window: int = 21) -> pd.DataFrame:
-    """Append ``volume_zscore_{window}`` (past-only)."""
+    """Append ``volume_zscore_{window}`` (past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     col = f"volume_zscore_{window}"
     return prices.assign(
         **{
@@ -293,7 +334,13 @@ def add_volume_zscore(prices: pd.DataFrame, *, window: int = 21) -> pd.DataFrame
 
 
 def add_atr(prices: pd.DataFrame, *, period: int = 14) -> pd.DataFrame:
-    """Append ``atr_{period}`` (past-only Wilder ATR)."""
+    """Append ``atr_{period}`` (past-only Wilder ATR).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     col = f"atr_{period}"
     # Multi-input: build a per-ticker slice and apply _atr_naive to (high, low, close).
     parts: list[pd.Series] = []
@@ -310,7 +357,13 @@ def add_atr(prices: pd.DataFrame, *, period: int = 14) -> pd.DataFrame:
 
 
 def add_bollinger(prices: pd.DataFrame, *, window: int = 20, num_std: float = 2.0) -> pd.DataFrame:
-    """Append ``bb_mid``, ``bb_upper``, ``bb_lower`` (past-only)."""
+    """Append ``bb_mid``, ``bb_upper``, ``bb_lower`` (past-only).
+
+    .. warning::
+       MUST be sorted ascending by ``period_close_ts`` within each ``ticker``;
+       cross-ticker bleed otherwise. Use :func:`add_technical_features` for
+       unsorted input (it sorts defensively).
+    """
     out = prices.copy()
     naive = _per_ticker_multi_col(out, lambda g: _bollinger_naive(g["close"], window, num_std))
     for col in ("bb_mid", "bb_upper", "bb_lower"):
@@ -461,17 +514,31 @@ def _build_naive_specs(cfg: FeatureConfig) -> dict[str, Callable[[pd.DataFrame],
     if "rsi" in cfg.indicators:
         specs[f"rsi_{cfg.rsi_period}"] = lambda p: _rsi_naive(p["close"], cfg.rsi_period)
     if "macd" in cfg.indicators:
-        # MACD spec returns a Series for the "macd" line; the guard also needs
-        # macd_signal and macd_hist. We register each via a fn that returns the
-        # corresponding column of the naive MACD frame.
-        def _macd_col(name: str):
-            return lambda p: _macd_naive(p["close"], cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)[
-                name
-            ]
+        # Round-1 review fix (SUBSTANTIVE 13): the three MACD specs each used
+        # to call ``_macd_naive`` independently, tripling the per-row cost in
+        # the guard. Memoize: a single-slot cache keyed by ``id(prices_frame)``
+        # holds the last naive MACD frame; the three column-specs share it so
+        # ``_macd_naive`` runs ONCE per row-slice. The cache holds at most ONE
+        # entry (cleared on each miss) -> memory is O(N) not O(N^2). The
+        # ``cached is p`` identity check guards against ``id`` reuse after GC.
+        _macd_cache: dict[int, tuple[pd.DataFrame, pd.DataFrame]] = {}
 
-        specs["macd"] = _macd_col("macd")
-        specs["macd_signal"] = _macd_col("macd_signal")
-        specs["macd_hist"] = _macd_col("macd_hist")
+        def _macd_spec(name: str) -> Callable[[pd.DataFrame], pd.Series]:
+            def fn(p: pd.DataFrame) -> pd.Series:
+                key = id(p)
+                cached = _macd_cache.get(key)
+                if cached is None or cached[0] is not p:
+                    frame = _macd_naive(p["close"], cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)
+                    _macd_cache.clear()
+                    _macd_cache[key] = (p, frame)
+                    cached = (p, frame)
+                return cached[1][name]
+
+            return fn
+
+        specs["macd"] = _macd_spec("macd")
+        specs["macd_signal"] = _macd_spec("macd_signal")
+        specs["macd_hist"] = _macd_spec("macd_hist")
     if "volatility" in cfg.indicators:
         for w in cfg.volatility_windows:
             specs[f"volatility_{w}"] = (lambda w: lambda p: _volatility_naive(p["close"], w))(w)
@@ -484,11 +551,10 @@ def _build_naive_specs(cfg: FeatureConfig) -> dict[str, Callable[[pd.DataFrame],
             p["high"], p["low"], p["close"], cfg.atr_period
         )
     if "bollinger" in cfg.indicators:
-        for col, name in (
-            ("bb_mid", "bb_mid"),
-            ("bb_upper", "bb_upper"),
-            ("bb_lower", "bb_lower"),
-        ):
+        # Round-1 review fix (TRIVIAL 4): the old loop bound an unused ``col``
+        # variable (``for col, name in (...)``). The Bollinger feature column
+        # name IS the naive frame column name, so a single ``name`` suffices.
+        for name in ("bb_mid", "bb_upper", "bb_lower"):
             specs[name] = (
                 lambda name: (
                     lambda p: _bollinger_naive(

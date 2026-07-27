@@ -77,7 +77,7 @@ def test_rollmean_excludes_current_row():
     # At row 3: mean(x[0..2]) = mean(0,1,2) = 1.0
     assert out["x_rollmean3"].iloc[3] == pytest.approx(1.0, abs=1e-9)
     # At row 4: mean(x[1..3]) = mean(1,2,3) = 2.0
-    assert out["x_rollmean4".replace("4", "3")].iloc[4] == pytest.approx(2.0, abs=1e-9)
+    assert out["x_rollmean3"].iloc[4] == pytest.approx(2.0, abs=1e-9)
     # If the leak had been present (closed='right'), row 3 would be mean(0,1,2,3)=1.5
     # for window=4 -- but we use window=3 here so the past-only value is mean(0,1,2)=1.0
     # and the leaked value would be mean(1,2,3)=2.0. Assert past-only.
@@ -189,3 +189,48 @@ def test_apply_lags_default_windows():
         assert f"x_lag{w}" in out.columns
         assert f"x_rollmean{w}" in out.columns
         assert f"x_rollstd{w}" in out.columns
+
+
+# ---------------------------------------------------------------------------
+# Round-1 review fixes: BLOCKER 2 (negative window rejection).
+# ---------------------------------------------------------------------------
+
+
+def test_apply_lags_rejects_negative_window():
+    """BLOCKER 2: ``windows=(-1,)`` would call ``shift(-1)`` (future leak,
+    FOOTGUN #1) -> ValueError before any transform runs."""
+    df = _feat_fixture(n=10)
+    with pytest.raises(ValueError, match="lag windows must be >= 1"):
+        apply_lags(df, ["x"], windows=(-1,))
+
+
+def test_apply_lags_rejects_zero_window():
+    """BLOCKER 2 corollary: window 0 is also invalid (rolling(0) is undefined;
+    shift(0) is identity -> not a lag)."""
+    df = _feat_fixture(n=10)
+    with pytest.raises(ValueError, match="lag windows must be >= 1"):
+        apply_lags(df, ["x"], windows=(0, 3))
+
+
+def test_lagconfig_rejects_negative_windows():
+    """BLOCKER 2: LagConfig.__post_init__ rejects windows < 1."""
+    with pytest.raises(ValueError, match="LagConfig.windows must be >= 1"):
+        LagConfig(windows=(-1, 3))
+
+
+def test_lagconfig_rejects_zero_windows():
+    """BLOCKER 2 corollary: LagConfig rejects window 0."""
+    with pytest.raises(ValueError, match="LagConfig.windows must be >= 1"):
+        LagConfig(windows=(0,))
+
+
+def test_lagconfig_rejects_unknown_methods():
+    """BLOCKER 2 corollary: LagConfig rejects unknown method names."""
+    with pytest.raises(ValueError, match="LagConfig.methods must be subset"):
+        LagConfig(methods=("shift", "rolling_mean", "bogus"))
+
+
+def test_lagconfig_accepts_valid_config():
+    """BLOCKER 2 corollary: a valid config constructs without raising."""
+    cfg = LagConfig(windows=(1, 3), methods=("shift", "rolling_mean", "rolling_std"))
+    assert cfg.windows == (1, 3)

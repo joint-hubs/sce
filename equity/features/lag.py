@@ -51,6 +51,24 @@ class LagConfig:
     windows: tuple[int, ...] = DEFAULT_LAG_WINDOWS
     methods: tuple[str, ...] = ("shift", "rolling_mean", "rolling_std")
 
+    def __post_init__(self) -> None:
+        # Round-1 review fix (BLOCKER 2): reject non-positive windows and
+        # unknown methods at construction time. ``windows=(-1,)`` would make
+        # ``_shift_lag`` call ``s.shift(-1)`` (a future leak, FOOTGUN #1).
+        # Frozen dataclass -> use ``object.__setattr__`` if we ever needed to
+        # mutate; validation only needs to raise, so no mutation here.
+        bad_w = [w for w in self.windows if w < 1]
+        if bad_w:
+            raise ValueError(
+                f"LagConfig.windows must be >= 1; got invalid values {bad_w} in {self.windows}."
+            )
+        allowed = {"shift", "rolling_mean", "rolling_std"}
+        bad_m = [m for m in self.methods if m not in allowed]
+        if bad_m:
+            raise ValueError(
+                f"LagConfig.methods must be subset of {sorted(allowed)}; got unknown {bad_m}."
+            )
+
     def describe(self, base_columns: Iterable[str]) -> list[str]:
         """Return the list of output column names emitted for ``base_columns``."""
         cols: list[str] = []
@@ -129,6 +147,10 @@ def apply_lags(
     if missing:
         raise ValueError(f"apply_lags: base columns not found in df: {missing}")
     win_list = list(windows)
+    # Round-1 review fix (BLOCKER 2): reject non-positive windows BEFORE any
+    # transform runs. ``shift(-1)`` would be a future leak (FOOTGUN #1).
+    if any(w < 1 for w in win_list):
+        raise ValueError(f"lag windows must be >= 1; got {win_list}")
     meth = set(methods)
 
     out = df.copy()
@@ -139,15 +161,25 @@ def apply_lags(
     if "period_close_ts" in out.columns:
         out = out.sort_values(["ticker", "period_close_ts"]).reset_index(drop=True)
 
+    # Round-1 review fix (TRIVIAL 1): collect new columns in a dict and
+    # pd.concat once at the end. The previous fragmented ``out[...] = ...``
+    # assignment inside the triple-nested loop fired ~2500 pandas
+    # PerformanceWarning (fragmented columns) on the default 5-window x
+    # 3-method x N-base config.
+    new_cols: dict[str, pd.Series] = {}
     for c in base_cols:
         grouped = out.groupby("ticker", sort=False)[c]
         for w in win_list:
             if "shift" in meth:
-                out[f"{c}_lag{w}"] = grouped.transform(lambda s, n=w: _shift_lag(s, n))
+                new_cols[f"{c}_lag{w}"] = grouped.transform(lambda s, n=w: _shift_lag(s, n))
             if "rolling_mean" in meth:
-                out[f"{c}_rollmean{w}"] = grouped.transform(lambda s, n=w: _rollmean_past(s, n))
+                new_cols[f"{c}_rollmean{w}"] = grouped.transform(
+                    lambda s, n=w: _rollmean_past(s, n)
+                )
             if "rolling_std" in meth:
-                out[f"{c}_rollstd{w}"] = grouped.transform(lambda s, n=w: _rollstd_past(s, n))
+                new_cols[f"{c}_rollstd{w}"] = grouped.transform(lambda s, n=w: _rollstd_past(s, n))
+    if new_cols:
+        out = pd.concat([out, pd.DataFrame(new_cols, index=out.index)], axis=1)
     return out
 
 

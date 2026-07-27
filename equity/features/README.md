@@ -24,6 +24,23 @@ EVERY feature at row `t` is a function of `prices[:t]` ONLY (rows strictly befor
   - `_lag{N}` = `base.shift(N)` — inherently past-only (value N rows back).
   - `_rollmean{N}` / `_rollstd{N}` use `rolling(N, closed='left')` EXPLICITLY — excludes the current row. The pandas default `closed='right'` (includes current row) is the exact leakage the `lookahead_indicator` guard exists to catch.
 
+### Window units = trading rows, NOT calendar days
+
+The `N` in `ret_{N}d_log`, `sma_{N}`, `ema_{N}`, and the lag windows (`_lag{N}` / `_rollmean{N}` / `_rollstd{N}`) counts **N trading rows (sessions)**, not calendar days. Weekend/holiday gaps are skipped by row-position: if a ticker has sessions Mon, Tue, Thu, Fri, then `sma_2` at Friday = mean of Thursday and Friday closes (the two most-recent sessions), ignoring the Wed gap. This matches the per-ticker `groupby("ticker")` rolling semantics in pandas.
+
+### Sentiment zero-fill disambiguation (`has_sentiment`)
+
+When `sentiment_per_period` is provided, missing `(ticker, period)` rows in the aggregate are LEFT-JOINed as NaN and then filled to `0` for `sentiment_score` / `sentiment_pos` / `sentiment_neg` / `sentiment_neu` / `n_articles` (D4: missing period = 0 articles, hence neutral score). After the fill, `sentiment_score=0` is ambiguous (genuinely-neutral scored articles vs no articles at all).
+
+To disambiguate, `build_features` adds a `has_sentiment` **bool** column:
+
+- `True` where the LEFT-JOIN matched a non-null sentiment row AND `n_articles > 0` (after the fill).
+- `False` where the join missed (no articles for that period) OR `n_articles == 0`.
+- For the empty-sentiment-frame branch: `False` for all rows.
+- When `sentiment_per_period` is `None` (no sentiment block runs): `has_sentiment` is NOT added.
+
+Downstream consumers SHOULD gate on `has_sentiment` before interpreting `sentiment_score=0` as neutral.
+
 The `equity/diagnostics/lookahead_indicator.py` guard recomputes each indicator from `prices[:t]` only and asserts equality with the stored feature within `abs=1e-9`.
 
 ## Per-ticker invariant (D7)

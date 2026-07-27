@@ -211,3 +211,93 @@ def test_build_features_lookahead_guard_clean():
     result = run_lookahead_indicator(feats, prices)
     assert result["pass"] is True
     assert result["n_violations"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Round-1 review fixes: BLOCKER 3 (merge key uniqueness / row count), TEST 9
+# (tz-naive canonicalization), SUBSTANTIVE 15 (has_sentiment flag).
+# ---------------------------------------------------------------------------
+
+
+def test_build_features_rejects_duplicate_sentiment_keys():
+    """BLOCKER 3: duplicate (ticker, period_close_ts) keys in the sentiment
+    frame would fan-out the LEFT-JOIN -> ValueError."""
+    prices = _prices_fixture(n=10, n_tickers=1)
+    sent = _sentiment_fixture(n=10, n_tickers=1)
+    # Duplicate the first row -> duplicate (ticker, period_close_ts) key.
+    sent = pd.concat([sent, sent.iloc[[0]]], ignore_index=True)
+    with pytest.raises(ValueError, match="duplicate.*ticker.*period_close_ts"):
+        build_features(prices, sent)
+
+
+def test_build_features_row_count_preserved():
+    """BLOCKER 3: post-merge row count must equal input prices row count."""
+    prices = _prices_fixture(n=15, n_tickers=2)
+    sent = _sentiment_fixture(n=15, n_tickers=2)
+    feats = build_features(prices, sent)
+    assert len(feats) == len(prices)
+
+
+def test_canonicalize_tz_naive_sentiment():
+    """TEST 9: the tz-naive -> tz_localize('UTC') branch of
+    :func:`_canonicalize_tz_utc` (currently only the tz-aware branch is
+    covered by the other tests)."""
+    from equity.features.build import _canonicalize_tz_utc
+
+    df = pd.DataFrame(
+        {
+            "period_close_ts": pd.date_range("2024-01-01", periods=5, freq="D"),  # tz-naive
+            "x": [1.0, 2.0, 3.0, 4.0, 5.0],
+        }
+    )
+    out = _canonicalize_tz_utc(df, "period_close_ts")
+    assert out["period_close_ts"].dt.tz is not None
+    assert str(out["period_close_ts"].dt.tz) == "UTC"
+    # Values unchanged.
+    assert (out["x"] == df["x"]).all()
+
+
+def test_build_features_has_sentiment_flag():
+    """SUBSTANTIVE 15: ``has_sentiment`` bool flag disambiguates the NaN->0
+    fill. True where the LEFT-JOIN matched a non-null sentiment row
+    (n_articles > 0 after fill); False where the join missed (no articles)."""
+    prices = _prices_fixture(n=10, n_tickers=1)
+    # Sentiment covers only the first 3 periods; the rest miss the join.
+    sent = _sentiment_fixture(n=3, n_tickers=1)
+    feats = build_features(prices, sent)
+    assert "has_sentiment" in feats.columns
+    tk = feats[feats["ticker"] == "TK0"].sort_values("period_close_ts").reset_index(drop=True)
+    # The sentiment fixture may produce n_articles=0 for some rows even when
+    # the join matched; the flag is True only where n_articles > 0 after fill.
+    # Verify the flag is a bool and tracks n_articles > 0 row-by-row.
+    assert tk["has_sentiment"].dtype == bool
+    expected_flag = tk["n_articles"] > 0
+    assert (tk["has_sentiment"] == expected_flag).all()
+
+
+def test_build_features_has_sentiment_flag_empty_frame():
+    """SUBSTANTIVE 15: an empty sentiment frame -> has_sentiment=False for all
+    rows (no articles anywhere)."""
+    prices = _prices_fixture(n=8, n_tickers=1)
+    sent = pd.DataFrame(
+        columns=[
+            "ticker",
+            "period_close_ts",
+            "sentiment_score",
+            "sentiment_pos",
+            "sentiment_neg",
+            "sentiment_neu",
+            "n_articles",
+        ]
+    )
+    feats = build_features(prices, sent)
+    assert "has_sentiment" in feats.columns
+    assert (feats["has_sentiment"] == False).all()  # noqa: E712
+
+
+def test_build_features_no_sentiment_has_no_flag():
+    """SUBSTANTIVE 15: when sentiment_per_period is None, the has_sentiment
+    column is NOT added (no sentiment block ran)."""
+    prices = _prices_fixture(n=8, n_tickers=1)
+    feats = build_features(prices)
+    assert "has_sentiment" not in feats.columns
