@@ -8,12 +8,19 @@
 
 from __future__ import annotations
 
+import shutil
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from equity.data.registry import PROJECT_ROOT, get_universe_info
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    import tomli as tomllib
 
 
 def _to_timestamp(value: str | date | pd.Timestamp) -> pd.Timestamp:
@@ -83,7 +90,8 @@ class EquityDataLoader:
     start, end:
         Window bounds (inclusive). Date-like strings or :class:`datetime.date`.
     period:
-        Bar period for future OHLCV ingestion (S1.2). Stored, not used in S1.1.
+        Bar interval forwarded to the OHLCV fetcher (e.g. ``"1d"`` for daily
+        bars). Used by :meth:`fetch_prices` (S1.2).
     tickers:
         Optional explicit ticker filter. When provided, each ticker is validated
         against the universe file and the window.
@@ -175,6 +183,111 @@ class EquityDataLoader:
                 alive_frame["delisted_at"].tolist(),
             )
         ]
+
+    # ------------------------------------------------------------------
+    # S1.2: OHLCV ingestion + partitioned parquet store
+    # ------------------------------------------------------------------
+
+    def _load_prices_config(self) -> dict[str, Any]:
+        """Load the ``[prices]`` section from the universe TOML config.
+
+        Returns an empty dict if the section is absent (callers apply their
+        own defaults). Reads the same TOML that produced :attr:`self.info`.
+        """
+        with self.info.path.open("rb") as handle:
+            payload = tomllib.load(handle)
+        return payload.get("prices", {})
+
+    def fetch_prices(self, output_dir: str | Path | None = None) -> Path:
+        """Fetch OHLCV bars for the alive universe and write a partitioned
+        parquet store.
+
+        Flow:
+
+        1. Resolve the alive-ticker set via :meth:`universe` (delisting-aware).
+        2. Fetch OHLCV via :func:`equity.data.fetch.fetch_yfinance_ohlcv`
+           (in-process yfinance; per-ticker errors are logged and skipped).
+        3. Validate the long-form frame with
+           :func:`equity.data.schema.validate_prices` (pandera schema + tz-aware
+           ``period_close_ts`` guard) and assert primary-key uniqueness via
+           :func:`equity.data.schema.assert_primary_key_unique`.
+        4. Write a Hive-style partitioned parquet dataset under ``output_dir``,
+           partitioned by ``year``/``month`` derived from ``period_close_ts``
+           (America/New_York session close).
+
+        The write is a **full rewrite** (not incremental): if ``output_dir``
+        exists it is removed first so stale partitions from prior runs do not
+        leak in. On read-back, ``year``/``month`` are reconstructed from the
+        Hive path (they are partition keys, not data columns -- see
+        ``equity/data/README.md``).
+
+        Parameters
+        ----------
+        output_dir:
+            Output directory for the partitioned parquet store. When ``None``,
+            falls back to ``[prices].output_dir`` from the universe TOML
+            (default ``data/equity/prices`` relative to ``PROJECT_ROOT``).
+
+        Returns
+        -------
+        pathlib.Path
+            The output directory Path (absolute).
+
+        Raises
+        ------
+        ValueError
+            If the alive universe is empty for the window.
+        RuntimeError
+            If yfinance returned no rows for any ticker.
+        """
+        from equity.data.fetch import fetch_yfinance_ohlcv
+        from equity.data.schema import (
+            assert_primary_key_unique,
+            validate_prices,
+        )
+
+        prices_cfg = self._load_prices_config()
+        if output_dir is not None:
+            out_path = Path(output_dir)
+        else:
+            out_path = Path(prices_cfg.get("output_dir", "data/equity/prices"))
+        if not out_path.is_absolute():
+            out_path = PROJECT_ROOT / out_path
+
+        alive = self.universe()
+        tickers = [t for (t, _listed, _delisted) in alive]
+        if not tickers:
+            raise ValueError(
+                f"No alive tickers in universe '{self.universe_name}' for "
+                f"window [{self.start.date()}, {self.end.date()}]."
+            )
+
+        raw = fetch_yfinance_ohlcv(tickers, self.start, self.end, self.period)
+        if raw.empty:
+            raise RuntimeError(
+                f"yfinance returned no rows for {len(tickers)} tickers in "
+                f"[{self.start.date()}, {self.end.date()}]."
+            )
+        validated = validate_prices(raw)
+        assert_primary_key_unique(validated)
+
+        # Derive year/month partition keys from the tz-aware session close.
+        out = validated.copy()
+        out["year"] = out["period_close_ts"].dt.year
+        out["month"] = out["period_close_ts"].dt.month
+
+        # Full rewrite: clear stale partitions before writing.
+        if out_path.exists():
+            shutil.rmtree(out_path)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        partition_cols = prices_cfg.get("partition_cols", ["year", "month"])
+        out.to_parquet(
+            out_path,
+            partition_cols=partition_cols,
+            index=False,
+        )
+        return out_path
 
 
 __all__ = ["EquityDataLoader"]

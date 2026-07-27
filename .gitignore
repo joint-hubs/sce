@@ -71,6 +71,9 @@ catboost_info/
 sce/graphify-out/
 scripts/tmp_*.ps1
 
+# Equity OHLCV parquet stores (regenerated; S1.2 fetch_prices output)
+data/equity/
+
 # Results (regenerated)
 results/
 # GCP overnight-batch run artefacts unpacked into the repo root (not citable)
