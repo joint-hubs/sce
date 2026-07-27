@@ -1,9 +1,65 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-27** (FOC-48 slice S1 — equity data-acquisition package, TEST PASSED, ready to merge)
+> Last update: **2026-07-28** (FOC-50 S3 — lag-aware feature layer TEST PASS, Done; FOC-49 S2 sentiment already merged)
 
-## Equity forecasting pipeline (FOC-47/48) — branch `foc-48-s1-data-acquisition`
+## Equity forecasting pipeline (FOC-50) — branch `foc-50-lag-aware-feature-layer`
+
+**Status (2026-07-28):** Slice S3 (lag-aware technical + sentiment feature layer)
+IMPLEMENTED + REVIEWED (r2 APPROVED for TEST) + **TEST PASS** on feature branch
+`foc-50-lag-aware-feature-layer` (HEAD `82fe3ee`); transitioned In Review → Done.
+5 commits: `e661bcc` (S3.1 technical), `b288e97` (S3.2 lag),
+`d453c5c` (S3.3 lookahead guard), `ac27401` (S3 build+README),
+`82fe3ee` (r1 review fix).
+
+New package `equity/features/` (sibling of `equity/data` and `equity/sentiment`):
+- `equity/features/technical.py` — `add_technical_features` + per-indicator
+  adders (returns, SMA/EMA, RSI, MACD, Bollinger, ATR, volatility,
+  volume_zscore); naive spec → shift(1) pattern keeps THE invariant in one
+  place; `closed='left'` enforced in lag layer.
+- `equity/features/lag.py` — `apply_lags` + `LagConfig` (both reject w<1 +
+  unknown methods); shift/rollmean/rollstd over `(1,3,5,10,21)` windows per
+  ticker; per-ticker isolation via `groupby("ticker", sort=False)`.
+- `equity/features/build.py` — `build_features(prices, sentiment_per_period,
+  ...)` orchestrates technical + sentiment LEFT-JOIN + lag; pre-merge duplicate
+  check + post-merge row-count assert; `has_sentiment` bool column
+  disambiguates neutral-0 vs no-articles-0; canonicalizes sentiment tz to UTC
+  before merge.
+- `equity/features/README.md` — PIT semantics (windows = trading rows, NOT
+  calendar days), `has_sentiment` contract, VWAP-vs-hlc_average open question.
+- `equity/diagnostics/lookahead_indicator.py` — `run_lookahead_indicator` +
+  CLI; auto-generates specs for price-derived lag cols; `--strict` /
+  `--max-rows`; decoupled from `equity.data.registry`; absolute-path
+  containment.
+
+**Tests:** `tests/equity/` — **269 passed + 7 skipped + 0 failed + 0 errors**
+in 56.6s (`results/foc50_pytest_2026-07-28.log`); 7 skips are env-gated live
+yfinance/FinBERT/VADER tests (default `SCE_EQUITY_LIVE_TEST=0`). Guard E2E
+(5 tickers × 250 rows synthetic, seed=42, 128 features, 1250 rows):
+clean = PASS (n_viol=0), leaky `close_rollmean3 closed='right'` =
+GUARD_DETECTED (n_viol=1240). Artifacts: `results/foc50_guard_*.{py,json}`.
+
+**Follow-ups (8 non-blocking, tracked in `.state/reviews/FOC-50-round2-followups.md`):**
+- 🟠 #1 Extend guard coverage to sentiment/technical-derived lag cols
+  (`base_frame` param) + `test_guard_detects_leaky_sentiment_rollmean` —
+  MUST CLOSE before S4 consumes `build_features` output.
+- 🟠 #2 Tighten README PIT claim: raw sentiment cols are CURRENT-PERIOD;
+  past-only forms are `*_lag{N}` / `*_rollmean{N}` / `*_rollstd{N}`.
+- 🟡 #3-7 batched into single hardening PR: `n=0` spec bypass,
+  unknown-method validation, tz-naive edge, `has_sentiment` consistency +
+  warn on missing `n_articles`, early-return-before-sort contract nit.
+- 🟡 #8 (FOC-49 scope) pin `torch` lower bound in `[sentiment]` extra.
+
+**Decisions locked (GATE 1, PRD `docs/plan/2026-07-27_trading_forecaster_prd.md`):**
+Q1 S&P 500 · Q2 `ret_1d` SCE target · Q3 free RSS first · Q4 interaction
+allow-list (ADR in S4) · Q5 horizons `{1,5,10,21,63}` · Q6 5y/63d/63d
+walk-forward · Q7 quantile heads.
+
+**Next (after merge):** close FOC-50 follow-ups #1+#2 → S4 (SCE equity
+enrichment + forecaster training on `build_features` output). Subtask plan:
+`docs/plan/2026-07-27_trading_forecaster_subtasks.md`.
+
+## Equity forecasting pipeline (FOC-48/49) — branch `foc-48-s1-data-acquisition`
 
 **Status (2026-07-27):** Slice S1 (Data acquisition + canonical schema) IMPLEMENTED
 on feature branch `foc-48-s1-data-acquisition` (NOT merged to main; **review r3

@@ -81,8 +81,17 @@ equity = [
     "pandas_market_calendars>=4.3.0,<6",
     "pandera>=0.20.0,<1",
 ]
+sentiment = [
+    # S2 FinBERT + VADER sentiment scorers. CPU torch is fine for the seed
+    # workload -- do NOT force CUDA. ``transformers`` and ``torch`` are
+    # heavy (multi-second import, large wheel) so they are NOT in the core
+    # ``dependencies`` list; install via ``pip install -e '.[sentiment]'``.
+    "transformers>=4.30",
+    "torch",
+    "vaderSentiment>=3.3.2",
+]
 all = [
-    "stat-context[models,dev,data,viz,docs,equity]",
+    "stat-context[models,dev,data,viz,docs,equity,sentiment]",
 ]
 
 [project.urls]

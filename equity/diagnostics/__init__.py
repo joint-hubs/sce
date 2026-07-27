@@ -13,7 +13,21 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
         from equity.diagnostics.published_at_guard import run_published_at_guard
 
         return run_published_at_guard
+    if name == "run_sentiment_aggregate_guard":
+        from equity.diagnostics.sentiment_aggregate_guard import (
+            run_sentiment_aggregate_guard,
+        )
+
+        return run_sentiment_aggregate_guard
+    if name == "run_lookahead_indicator":
+        from equity.diagnostics.lookahead_indicator import run_lookahead_indicator
+
+        return run_lookahead_indicator
     raise AttributeError(f"module 'equity.diagnostics' has no attribute {name!r}")
 
 
-__all__ = ["run_published_at_guard"]
+__all__ = [
+    "run_published_at_guard",
+    "run_sentiment_aggregate_guard",
+    "run_lookahead_indicator",
+]
