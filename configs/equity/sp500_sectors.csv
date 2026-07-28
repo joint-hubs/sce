@@ -1,0 +1,38 @@
+# Static GICS hierarchy seed for FOC-51 S4 equity SCE enrichment.
+# Columns: ticker,sector,industry,mktcap_bucket
+# mktcap_bucket ∈ {large,mid,small,unknown}. Delisted / uncertain names → unknown.
+# Labels are best-effort public GICS; not a live fundamentals feed. Source: common-knowledge GICS map for the 33 seed tickers in sp500_universe.csv.
+ticker,sector,industry,mktcap_bucket
+ENE,Energy,Oil & Gas Exploration & Production,unknown
+LEH,Financials,Investment Banking & Brokerage,unknown
+WCOM,Communication Services,Integrated Telecommunication Services,unknown
+BSC,Financials,Investment Banking & Brokerage,unknown
+WB,Financials,Diversified Banks,unknown
+MER,Financials,Investment Banking & Brokerage,unknown
+WM,Financials,Thrifts & Mortgage Finance,unknown
+CFC,Financials,Thrifts & Mortgage Finance,unknown
+SHLD,Consumer Discretionary,Other Specialty Retail,unknown
+GM,Consumer Discretionary,Automobile Manufacturers,unknown
+RSH,Consumer Discretionary,Other Specialty Retail,unknown
+JCP,Consumer Discretionary,Broadline Retail,unknown
+MON,Materials,Fertilizers & Agricultural Chemicals,unknown
+AAPL,Information Technology,Technology Hardware Storage & Peripherals,large
+MSFT,Information Technology,Systems Software,large
+AMZN,Consumer Discretionary,Broadline Retail,large
+NVDA,Information Technology,Semiconductors,large
+GOOGL,Communication Services,Interactive Media & Services,large
+META,Communication Services,Interactive Media & Services,large
+BRK.B,Financials,Multi-Sector Holdings,large
+JPM,Financials,Diversified Banks,large
+V,Financials,Transaction & Payment Processing Services,large
+JNJ,Health Care,Pharmaceuticals,large
+WMT,Consumer Staples,Consumer Staples Merchandise Retail,large
+XOM,Energy,Integrated Oil & Gas,large
+UNH,Health Care,Managed Health Care,large
+MA,Financials,Transaction & Payment Processing Services,large
+PG,Consumer Staples,Household Products,large
+HD,Consumer Discretionary,Home Improvement Retail,large
+CVX,Energy,Integrated Oil & Gas,large
+KO,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,large
+PEP,Consumer Staples,Soft Drinks & Non-alcoholic Beverages,large
+COST,Consumer Staples,Consumer Staples Merchandise Retail,large

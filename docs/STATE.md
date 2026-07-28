@@ -1,9 +1,70 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-28** (FOC-50 S3 — lag-aware feature layer TEST PASS, Done; FOC-49 S2 sentiment already merged)
+> Last update: **2026-07-28** (FOC-51 S4 — Done, TEST PASS post-r1 review; FOC-50 S3 merged to main via PR #2)
 
-## Equity forecasting pipeline (FOC-50) — branch `foc-50-lag-aware-feature-layer`
+## Equity forecasting pipeline (FOC-51) — Done, branch `foc-51-sce-equity-crossfit` ready for merge
+
+**Status (2026-07-28):** Slice S4 (SCE equity enrichment, rolling cross-fit)
+IMPLEMENTED + REVIEWED (round 2 clean) + **TEST PASS** on feature branch
+`foc-51-sce-equity-crossfit` (off main `09697c5` = PR #2 merge). Transitioned
+In Review → **Done**. 5 commits total: `2b3cd8a` (S4.1/S4.2/S4.3), `73fc001`
+(S4.4), `5733f93` (S4.5/S4.6), `7f380bc` (round-1 review fixes),
+`c9b1dd8` (state update).
+
+Test evidence: `results/foc51_pytest_2026-07-28.log` — **432 passed + 7 skipped
++ 0 failed + 0 errors + 14 warnings** in 74.04s (exit 0); matches DEV hand-off
+claim. Coverage 81% global; `equity/sce/enrich.py` 83% (init/config/transform_partial 100%).
+
+New package `equity/sce/` (sibling of `equity/features/`, wraps vendored `sce/`
+upstream — NO files under `sce/` modified):
+- `equity/sce/config.py` — frozen `EquityHierarchyConfig` (target_col=`ret_1d`,
+  categorical_cols=`(ticker,sector,industry,mktcap_bucket,time_bucket)`,
+  `DEFAULT_INTERACTIONS` curated allow-list, min_group_size=20,
+  cross_fit_strategy=`rolling`, n_folds=5, include_relative_features=False,
+  max_interaction_depth=2, time_col=`period_close_ts`).
+- `equity/sce/enrich.py` — `EquityContextEnricher`: `_prepare` (tz→UTC,
+  sector join, `time_bucket`=`to_period("M")`, `ret_1d`=`ret_1d_log` alias),
+  `build_context_config`→`sce.ContextConfig`, `fit_transform` (SCE rolling
+  cross-fit + POST-FILTER interaction levels to allow-list), `transform_partial`
+  (PIT-safe: refit engine `use_cross_fitting=False` on `(train_start,refit_boundary]`
+  then `transform(new_rows)`). Context cols named `{level}_{target}_{stat}`.
+- `equity/sce/transform_partial.py` — thin wrapper.
+- `equity/sce/__init__.py` — lazy re-exports.
+- `docs/adr/0001-sce-interaction-allowlist.md` — S4.3 ADR (Proposed): upstream
+  `ContextConfig.interactions: Optional[List[Tuple[str,...]]]=None` (backward-
+  compat); S4 NOW uses equity-side output post-filter (bounds cardinality w/o
+  touching `sce/`).
+- `configs/equity/sp500_sectors.csv` — 33 seed tickers, GICS-ish
+  sector/industry/mktcap_bucket (uncertain → `unknown`).
+- `equity/diagnostics/walk_forward_monotonicity.py` — `run_walk_forward_monotonicity(folds, *, strict)`
+  + CLI; accepts explicit fold list OR SCE `_last_fold_timestamps` shape (adapter).
+- `equity/diagnostics/survivorship_check.py` — `run_survivorship_check(universe, *, min_delisted=13)`
+  + CLI; reads `configs/equity/<name>_universe.csv`, counts parseable `delisted_at`.
+- `equity/diagnostics/sce_reuse.py` — S4.6 equity-local SCE reuse runner
+  (`evaluate_equity_sce` + permuted/shuffled/crossfit_ab/dominance wrappers);
+  mirrors `scripts/diagnostics/_common.evaluate_config_dataframe` semantics,
+  `Ridge` estimator both legs (fair comparison).
+- Tests: `tests/equity/test_sce_{enrich,hierarchy,transform_partial,reuse}.py`,
+  `test_walk_forward_monotonicity.py`, `test_survivorship_check.py` — **34 new
+  tests**; `tests/equity` now 303 passed + 7 skipped (was 269+7 at S3).
+
+Decisions locked (GATE 1): Q1 S&P 500 · Q2 `ret_1d` SCE target · Q4 interaction
+allow-list ADR in S4 (shipped as ADR-0001 + equity post-filter) · Q5 horizons
+{1,5,10,21,63} · Q6 5y/63d/63d walk-forward · Q7 quantile heads. S4-specific:
+hierarchy cols from static CSV (Kaggle loader deferred to follow-up),
+`time_bucket`=calendar month, `transform_partial`=full refit (CF off).
+
+**Open follow-ups (post-S4):** (1) Kaggle fundamentals loader for real
+sector/industry/mktcap (replaces static CSV); (2) CSV hygiene — `sp500_universe.csv`
+empty `delisted_at` uses double comma (handled via `to_datetime(errors="coerce")`
+but worth normalizing); (3) S5 forward targets `ret_hN` + forecaster training on
+`build_features`+SCE-enriched output; (4) upstream `ContextConfig.interactions`
+field per ADR-0001 (removes equity post-filter compute waste).
+
+**Next:** S5 (forecaster training on enriched output) — gated on FOC-51 review.
+
+## Equity forecasting pipeline (FOC-50) — merged to main via PR #2
 
 **Status (2026-07-28):** Slice S3 (lag-aware technical + sentiment feature layer)
 IMPLEMENTED + REVIEWED (r2 APPROVED for TEST) + **TEST PASS** on feature branch
