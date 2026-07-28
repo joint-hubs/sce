@@ -1,7 +1,27 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-28** (FOC-51 S4 — Done, TEST PASS post-r1 review; FOC-50 S3 merged to main via PR #2)
+> Last update: **2026-07-28** (FOC-52 S5 — In Progress on `foc-52-multihorizon-forecaster`; FOC-51 S4 Done)
+
+## Equity forecasting pipeline (FOC-52) — In Progress, branch `foc-52-multihorizon-forecaster`
+
+**Status (2026-07-28):** Slice S5 (multi-horizon two-layer forecaster) IMPLEMENTING
+on feature branch `foc-52-multihorizon-forecaster` (off main post FOC-51 merge).
+Subtasks S5.1–S5.5: sector-head + residual + quantile + `forward_target_isolation`
++ single-fold `run_smoke`. Horizons Q5 = `{1,5,10,21,63}`; quantiles Q7 =
+`{0.05,0.5,0.95}`; OOF residual labels (PRD §9.9); ts-group split (FOC-51 R1).
+
+New package `equity/forecaster/`:
+- `config.py` — dataclass-only `HorizonConfig` / per-head params / `SmokeConfig`
+- `targets.py` — `add_forward_targets` → `ret_hN = log(close[t+N]/close[t])`
+- `sector_head.py` — `SectorHeadForecaster` (1 XGBoost / horizon, OOF CF)
+- `residual.py` — `InstrumentResidualForecaster` (OOF resid labels → `pred_hN`)
+- `quantile.py` — `QuantileHeadForecaster` (LightGBM quantile, 15 models)
+- `run_smoke.py` — `python -m equity.forecaster.run_smoke`
+- `metadata.py` — standalone `metadata.json` writer
+- `equity/diagnostics/forward_target_isolation.py` — S5.3 leak guard + CLI
+
+**Next:** finish tests → hand-off In Review. S6 walk-forward gated on S5.
 
 ## Equity forecasting pipeline (FOC-51) — Done, branch `foc-51-sce-equity-crossfit` ready for merge
 

@@ -358,6 +358,8 @@ class EquityContextEnricher:
         # Defensive: drop any exclude_cols / ret_h* forwards from the prepared
         # frame so they cannot leak into SCE auto paths (we pass categorical
         # cols explicitly, but cleaner to keep them out of X entirely).
+        # S5 multi-horizon forecaster labels (ret_h1/5/10/21/63) MUST stay out
+        # of the SCE feature block — this regex drop is the backstop.
         drop_fwd = [
             c
             for c in out.columns

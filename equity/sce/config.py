@@ -54,8 +54,10 @@ class EquityHierarchyConfig:
     random_state: int = 42
     max_interaction_depth: int = 2
     include_relative_features: bool = False
-    # Defensive: drop any forward-looking ``ret_h*`` targets if present on the
-    # features frame so auto-detection / SCE never treats them as inputs.
+    # Defensive: drop any forward-looking ``ret_h*`` / ``ret_hN`` targets
+    # (S5 multi-horizon forecaster labels) if present on the features frame so
+    # auto-detection / SCE never treats them as inputs. The enricher also
+    # drops columns matching ``c.startswith("ret_h")`` regardless of this list.
     exclude_cols: Tuple[str, ...] = ()
 
 
