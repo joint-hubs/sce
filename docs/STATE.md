@@ -1,14 +1,20 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-28** (FOC-51 S4 — SCE equity enrichment + rolling cross-fit, TEST PASS, In Review; FOC-50 S3 merged to main via PR #2)
+> Last update: **2026-07-28** (FOC-51 S4 — Done, TEST PASS post-r1 review; FOC-50 S3 merged to main via PR #2)
 
-## Equity forecasting pipeline (FOC-51) — branch `foc-51-sce-equity-crossfit`
+## Equity forecasting pipeline (FOC-51) — Done, branch `foc-51-sce-equity-crossfit` ready for merge
 
 **Status (2026-07-28):** Slice S4 (SCE equity enrichment, rolling cross-fit)
-IMPLEMENTED + **TEST PASS** on feature branch `foc-51-sce-equity-crossfit`
-(off main `09697c5` = PR #2 merge). 3 commits: `2b3cd8a` (S4.1/S4.2/S4.3),
-`73fc001` (S4.4), `5733f93` (S4.5/S4.6). Transitioned In Progress → In Review.
+IMPLEMENTED + REVIEWED (round 2 clean) + **TEST PASS** on feature branch
+`foc-51-sce-equity-crossfit` (off main `09697c5` = PR #2 merge). Transitioned
+In Review → **Done**. 5 commits total: `2b3cd8a` (S4.1/S4.2/S4.3), `73fc001`
+(S4.4), `5733f93` (S4.5/S4.6), `7f380bc` (round-1 review fixes),
+`c9b1dd8` (state update).
+
+Test evidence: `results/foc51_pytest_2026-07-28.log` — **432 passed + 7 skipped
++ 0 failed + 0 errors + 14 warnings** in 74.04s (exit 0); matches DEV hand-off
+claim. Coverage 81% global; `equity/sce/enrich.py` 83% (init/config/transform_partial 100%).
 
 New package `equity/sce/` (sibling of `equity/features/`, wraps vendored `sce/`
 upstream — NO files under `sce/` modified):
