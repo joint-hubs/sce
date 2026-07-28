@@ -226,45 +226,10 @@ class InstrumentResidualForecaster:
                     ordered.iloc[va_pos][ps_col].astype(float).to_numpy() + pred_resid
                 )
 
-            # Fill remaining labeled gaps (earliest train-only block).
+            # Earliest train-only block stays NaN (no future-trained filler).
+            # When sector OOF is NaN, resid label is NaN and is already skipped
+            # above via tr_mask / va_mask = resid.notna().
             labeled = resid.notna().to_numpy()
-            missing = labeled & np.isnan(oof_pred[f"pred_h{h}"])
-            if missing.any():
-                have = labeled & ~np.isnan(oof_pred[f"pred_h{h}"])
-                src = np.where(have)[0]
-                dst = np.where(missing)[0]
-                if len(src) >= 2:
-                    tr_ps = ordered.iloc[src][ps_col]
-                    tr_ps_f, dst_ps_f, mean = _fill_with_train_mean(
-                        tr_ps, ordered.iloc[dst][ps_col]
-                    )
-                    X_src, _ = make_design_matrix(
-                        ordered.iloc[src],
-                        feature_cols=self.feature_cols_,
-                        sector_col=self.sector_col,
-                    )
-                    X_src = X_src.copy()
-                    X_src[ps_col] = tr_ps_f.to_numpy()
-                    y_src = resid.iloc[src].astype(float).to_numpy()
-                    filler = _new_xgb(self.params, seed=self.seed + 100 + h + 17)
-                    filler.fit(X_src, y_src)
-                    X_dst, _ = make_design_matrix(
-                        ordered.iloc[dst],
-                        feature_cols=self.feature_cols_,
-                        sector_col=self.sector_col,
-                    )
-                    X_dst = X_dst.copy()
-                    X_dst[ps_col] = dst_ps_f.to_numpy()
-                    if self.sector_col in X_src.columns and self.sector_col in X_dst.columns:
-                        X_dst[self.sector_col] = pd.Categorical(
-                            X_dst[self.sector_col],
-                            categories=X_src[self.sector_col].cat.categories,
-                        )
-                    pred_resid = filler.predict(X_dst)
-                    oof_resid[f"pred_resid_h{h}"][dst] = pred_resid
-                    oof_pred[f"pred_h{h}"][dst] = (
-                        ordered.iloc[dst][ps_col].astype(float).to_numpy() + pred_resid
-                    )
 
             # Final full-fit on all labeled residual rows.
             all_lab = np.where(labeled)[0]

@@ -1,12 +1,14 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-28** (FOC-52 S5 — In Progress on `foc-52-multihorizon-forecaster`; FOC-51 S4 Done)
+> Last update: **2026-07-28** (FOC-52 S5 — In Review on `foc-52-multihorizon-forecaster`; FOC-51 S4 Done)
 
-## Equity forecasting pipeline (FOC-52) — In Progress, branch `foc-52-multihorizon-forecaster`
+## Equity forecasting pipeline (FOC-52) — In Review, branch `foc-52-multihorizon-forecaster`
 
-**Status (2026-07-28):** Slice S5 (multi-horizon two-layer forecaster) IMPLEMENTING
+**Status (2026-07-28):** Slice S5 (multi-horizon two-layer forecaster) IMPLEMENTED
++ hand-off published + transitioned **In Review**. Commit `ec46d51`
 on feature branch `foc-52-multihorizon-forecaster` (off main post FOC-51 merge).
+28/28 new tests green; equity suite 337 passed + 7 skipped.
 Subtasks S5.1–S5.5: sector-head + residual + quantile + `forward_target_isolation`
 + single-fold `run_smoke`. Horizons Q5 = `{1,5,10,21,63}`; quantiles Q7 =
 `{0.05,0.5,0.95}`; OOF residual labels (PRD §9.9); ts-group split (FOC-51 R1).

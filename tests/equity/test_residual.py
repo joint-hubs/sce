@@ -86,16 +86,22 @@ def fitted_bundle():
 def test_residual_composition_identity(fitted_bundle) -> None:
     oof = fitted_bundle["residual"].oof_predictions()
     for h in (1, 5):
-        y = fitted_bundle["panel"][f"ret_h{h}"]
-        labeled = y.notna()
-        # 100% labeled coverage of the final pred.
-        assert oof.loc[labeled, f"pred_h{h}"].notna().all()
+        ps = oof[f"pred_sector_h{h}"]
+        ph = oof[f"pred_h{h}"]
+        pr = oof[f"pred_resid_h{h}"]
+        # Residual OOF cannot extend past finite sector OOF (no earliest-block fill).
+        # Note: residual may cover a *subset* of sector-finite rows — the first
+        # residual CF fold trains only on the earliest train-only block where
+        # sector OOF (and thus resid labels) are NaN, so that fold is skipped and
+        # its val block stays NaN by design.
+        sector_finite = ps.notna()
+        resid_finite = ph.notna()
+        assert sector_finite.any()
+        assert resid_finite.any()
+        assert not (resid_finite & ~sector_finite).any()
+        assert oof.loc[resid_finite, f"pred_resid_h{h}"].notna().all()
         # Composition identity: pred = sector + resid (where all three finite).
-        both = (
-            oof[f"pred_sector_h{h}"].notna()
-            & oof[f"pred_resid_h{h}"].notna()
-            & oof[f"pred_h{h}"].notna()
-        )
+        both = sector_finite & pr.notna() & resid_finite
         assert both.any()
         recon = (
             oof.loc[both, f"pred_sector_h{h}"].to_numpy()
@@ -104,6 +110,28 @@ def test_residual_composition_identity(fitted_bundle) -> None:
         np.testing.assert_allclose(
             oof.loc[both, f"pred_h{h}"].to_numpy(), recon, rtol=0, atol=1e-10
         )
+
+
+def test_residual_oof_temporal_integrity(fitted_bundle) -> None:
+    """Residual finite OOF only where sector OOF is finite (no earliest-block fill)."""
+    oof = fitted_bundle["residual"].oof_predictions().reset_index(drop=True)
+    for h in (1, 5):
+        ps = oof[f"pred_sector_h{h}"].to_numpy(dtype=float)
+        pr = oof[f"pred_resid_h{h}"].to_numpy(dtype=float)
+        ph = oof[f"pred_h{h}"].to_numpy(dtype=float)
+        finite_ps = np.isfinite(ps)
+        finite_pr = np.isfinite(pr)
+        finite_ph = np.isfinite(ph)
+        # Residual cannot invent coverage beyond sector OOF.
+        assert not np.any(finite_pr & ~finite_ps), (
+            f"h={h}: residual OOF finite where sector OOF is NaN"
+        )
+        assert not np.any(finite_ph & ~finite_ps), (
+            f"h={h}: pred_h finite where sector OOF is NaN"
+        )
+        assert finite_ps.any() and finite_pr.any()
+        # Sector earliest-block NaNs stay NaN through residual.
+        assert (~finite_ps).any()
 
 
 def test_residual_label_is_oof_based(fitted_bundle) -> None:

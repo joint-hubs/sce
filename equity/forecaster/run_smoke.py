@@ -219,6 +219,12 @@ def run_smoke(
                 frame[y_col], lo, hi
             )
 
+    # JSON-safe coverage: NaN/inf → None (json.dumps would emit invalid NaN).
+    coverage = {
+        h: (None if (v is None or not np.isfinite(v)) else float(v))
+        for h, v in coverage.items()
+    }
+
     # 8. Persist artefacts.
     dest = Path(out_dir) if out_dir is not None else DEFAULT_OUTPUT
     dest.mkdir(parents=True, exist_ok=True)
@@ -321,7 +327,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "coverage": result["coverage"],
         "run_grade": result["metadata"].get("run_grade"),
     }
-    print(json.dumps(summary, indent=2, default=str))
+    print(json.dumps(summary, indent=2, default=str, allow_nan=False))
     return 0
 
 

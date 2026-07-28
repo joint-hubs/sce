@@ -155,36 +155,8 @@ class QuantileHeadForecaster:
                         )
                     oof_data[qcol][va_pos] = model.predict(X_va)
 
-                # Fill earliest train-only block.
+                # Earliest train-only block stays NaN (no future-trained filler).
                 labeled = ordered[y_col].notna().to_numpy()
-                missing = labeled & np.isnan(oof_data[qcol])
-                if missing.any():
-                    have = labeled & ~np.isnan(oof_data[qcol])
-                    src = np.where(have)[0]
-                    dst = np.where(missing)[0]
-                    if len(src) >= 2:
-                        X_src, _ = make_design_matrix(
-                            ordered.iloc[src],
-                            feature_cols=self.feature_cols_,
-                            sector_col=self.sector_col,
-                        )
-                        y_src = ordered.iloc[src][y_col].astype(float).to_numpy()
-                        filler = _new_lgbm(self.params, seed=seed_q + 17, alpha=q)
-                        filler.fit(X_src, y_src, categorical_feature=cat_features)
-                        X_dst, _ = make_design_matrix(
-                            ordered.iloc[dst],
-                            feature_cols=self.feature_cols_,
-                            sector_col=self.sector_col,
-                        )
-                        if (
-                            self.sector_col in X_src.columns
-                            and self.sector_col in X_dst.columns
-                        ):
-                            X_dst[self.sector_col] = pd.Categorical(
-                                X_dst[self.sector_col],
-                                categories=list(X_src[self.sector_col].cat.categories),
-                            )
-                        oof_data[qcol][dst] = filler.predict(X_dst)
 
                 # Final full-fit.
                 all_lab = np.where(labeled)[0]
@@ -262,8 +234,10 @@ class QuantileHeadForecaster:
     ) -> Dict[int, float]:
         """Fit-free helper: ts-group split, fit on train, coverage on test per h.
 
-        Used by tests / smoke to assert empirical 90% coverage ∈ [0.85, 0.95].
-        Refits models on the train slice only (does not mutate ``self``).
+        Used by tests / smoke to report empirical 90% coverage on a held-out
+        fold. Strict ``[0.85, 0.95]`` calibration is deferred to S6 on real
+        equity data. Refits models on the train slice only (does not mutate
+        ``self``).
         """
         train, test = ts_group_split(
             frame, time_col=self.time_col, test_frac=test_frac

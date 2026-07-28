@@ -6,8 +6,9 @@
 @data_flow: features + ret_hN -> rolling OOF XGBoost per horizon -> pred_sector_hN
 
 S5.1 sector-head forecaster. One XGBoost regressor per horizon, trained on the
-forward label ``ret_hN``. Out-of-fold predictions cover **every train row** via
-a rolling ts-group CF loop; a final full-refit model predicts the test slice.
+forward label ``ret_hN``. Out-of-fold predictions cover **val-fold rows only**
+via a rolling ts-group CF loop (earliest train-only block stays NaN by design);
+a final full-refit model predicts the test slice.
 """
 
 from __future__ import annotations
@@ -74,12 +75,9 @@ class SectorHeadForecaster:
             ``period_close_ts`` (and ideally ``sector``).
         return_oof:
             When True (default), stores an aligned OOF frame on ``self.oof_``
-            covering every input row that has a non-null label for each horizon
-            via rolling CF. Rows only seen as the last fold's train still get a
-            prediction from a later fold's val → with SCE rolling geometry we
-            still cover most rows; trailing / head gaps from TimeSeriesSplit are
-            filled by a final folding pass that predicts any remaining labeled
-            rows from the latest model trained without those rows.
+            with val-fold coverage only. The earliest TimeSeriesSplit train-only
+            block stays NaN by design (never used as a val block in any fold).
+            A final full-refit on all labeled rows powers ``.predict`` for new X.
         """
         if frame.empty:
             raise ValueError("SectorHeadForecaster.fit: empty frame")
@@ -149,36 +147,9 @@ class SectorHeadForecaster:
                     )
                 oof_data[pred_col][va_pos] = model.predict(X_va)
 
-            # Fill any labeled row still missing OOF (TimeSeriesSplit leaves the
-            # earliest train-only block without a val prediction). Refit without
-            # those rows and predict them — keeps a pure OOF contract.
+            # Earliest TimeSeriesSplit train-only block stays NaN in OOF by design
+            # (never a val block). Do not back-fill from later rows (forward leak).
             labeled = ordered[y_col].notna().to_numpy()
-            missing = labeled & np.isnan(oof_data[pred_col])
-            if missing.any():
-                have = labeled & ~np.isnan(oof_data[pred_col])
-                # Prefer later rows as the training source when filling early gaps.
-                src = np.where(have)[0]
-                dst = np.where(missing)[0]
-                if len(src) >= 2:
-                    X_src, _ = make_design_matrix(
-                        ordered.iloc[src],
-                        feature_cols=self.feature_cols_,
-                        sector_col=self.sector_col,
-                    )
-                    y_src = ordered.iloc[src][y_col].astype(float).to_numpy()
-                    filler = _new_xgb(self.params, seed=self.seed + h + 17)
-                    filler.fit(X_src, y_src)
-                    X_dst, _ = make_design_matrix(
-                        ordered.iloc[dst],
-                        feature_cols=self.feature_cols_,
-                        sector_col=self.sector_col,
-                    )
-                    if self.sector_col in X_src.columns and self.sector_col in X_dst.columns:
-                        X_dst[self.sector_col] = pd.Categorical(
-                            X_dst[self.sector_col],
-                            categories=X_src[self.sector_col].cat.categories,
-                        )
-                    oof_data[pred_col][dst] = filler.predict(X_dst)
 
             # Final full-fit model on all labeled rows (used by .predict for new X).
             all_lab = np.where(labeled)[0]
@@ -233,7 +204,7 @@ class SectorHeadForecaster:
         return out
 
     def oof_predictions(self) -> pd.DataFrame:
-        """Return the OOF frame produced by the last ``fit`` (100% labeled coverage)."""
+        """Return the OOF frame from the last ``fit`` (val-fold coverage; earliest train-only block is NaN by design)."""
         if self.oof_ is None:
             raise RuntimeError("SectorHeadForecaster.oof_predictions: no OOF stored")
         return self.oof_.copy()

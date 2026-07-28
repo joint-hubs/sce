@@ -130,6 +130,12 @@ def sectors_fixture() -> pd.DataFrame:
 
 
 @pytest.fixture(scope="module")
+def long_panel() -> pd.DataFrame:
+    """Long synthetic prices panel for h=21/h=63 horizon smoke (5 × 220 days)."""
+    return _prices_fixture(n=220, n_tickers=5)
+
+
+@pytest.fixture(scope="module")
 def enriched_features(prices_fixture: pd.DataFrame, sectors_fixture: pd.DataFrame):
     """Build features + run SCE enricher once per module (slow CF recycled).
 

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from equity.forecaster._splits import rolling_ts_folds
 from equity.forecaster.config import SectorHeadParams
 from equity.forecaster.sector_head import SectorHeadForecaster
 from equity.forecaster.targets import add_forward_targets
@@ -48,34 +49,107 @@ def _panel(n: int = 80, n_tickers: int = 4) -> pd.DataFrame:
     return add_forward_targets(prices, horizons=(1, 5, 10))
 
 
+def _ordered(panel: pd.DataFrame) -> pd.DataFrame:
+    return panel.sort_values(
+        ["period_close_ts", "ticker"], kind="mergesort"
+    ).reset_index(drop=True)
+
+
+def _val_union_and_earliest_block(
+    ordered: pd.DataFrame, *, n_folds: int, time_col: str = "period_close_ts"
+) -> tuple[set[int], set[int]]:
+    """Union of val-row positions across folds + earliest train-only block rows."""
+    folds = rolling_ts_folds(ordered, time_col=time_col, n_folds=n_folds)
+    val_union: set[int] = set()
+    for _tr, va in folds:
+        val_union.update(int(i) for i in va)
+    unique_ts = pd.Index(ordered[time_col].drop_duplicates().sort_values())
+    n_ts = len(unique_ts)
+    max_feasible_test = max(1, n_ts // (n_folds + 1))
+    earliest_ts = set(unique_ts[:max_feasible_test])
+    earliest_rows = {
+        int(i) for i in ordered.index[ordered[time_col].isin(earliest_ts)].to_numpy()
+    }
+    return val_union, earliest_rows
+
+
 @pytest.fixture(scope="module")
 def panel() -> pd.DataFrame:
     return _panel()
 
 
-def test_sector_head_oof_full_labeled_coverage(panel: pd.DataFrame) -> None:
+def test_sector_head_oof_valfold_coverage(panel: pd.DataFrame) -> None:
+    """OOF finite exactly on val-fold rows (earliest train-only block is NaN)."""
     horizons = (1, 5, 10)
+    n_folds = 4
+    ordered = _ordered(panel)
     head = SectorHeadForecaster(
         horizons=horizons,
         params=SectorHeadParams(n_estimators=20, max_depth=3),
-        n_folds=4,
+        n_folds=n_folds,
         seed=7,
     )
-    head.fit(panel, return_oof=True)
-    oof = head.oof_predictions()
+    head.fit(ordered, return_oof=True)
+    oof = head.oof_predictions().reset_index(drop=True)
+    val_union, earliest_rows = _val_union_and_earliest_block(ordered, n_folds=n_folds)
 
     for h in horizons:
         col = f"pred_sector_h{h}"
         assert col in oof.columns
-        y = panel.sort_values("period_close_ts").reset_index(drop=True)[f"ret_h{h}"]
-        labeled = y.notna()
-        # 100% of labeled rows get an OOF prediction.
-        assert labeled.sum() > 0
-        assert oof.loc[labeled, col].notna().all(), (
-            f"{col}: OOF coverage < 100% of labeled rows "
-            f"({oof.loc[labeled, col].isna().sum()} missing of {labeled.sum()})"
+        y = ordered[f"ret_h{h}"]
+        labeled_val = {i for i in val_union if pd.notna(y.iloc[i])}
+        finite_idx = {
+            int(i) for i in np.where(np.isfinite(oof[col].to_numpy(dtype=float)))[0]
+        }
+        assert finite_idx == labeled_val, (
+            f"{col}: finite OOF set != labeled val-union "
+            f"(extra={finite_idx - labeled_val}, missing={labeled_val - finite_idx})"
         )
-        assert np.isfinite(oof.loc[labeled, col].to_numpy()).all()
+        # Earliest train-only block must stay NaN (no future-trained fill).
+        for i in earliest_rows:
+            assert not np.isfinite(oof[col].iloc[i]), (
+                f"{col}: earliest train-only row {i} unexpectedly finite"
+            )
+
+
+def test_sector_head_oof_temporal_integrity(panel: pd.DataFrame) -> None:
+    """Prove no future-trained fill: finite OOF ⊆ val union; train strictly earlier.
+
+    Re-introducing a future-trained filler on the earliest block expands the
+    finite set beyond val-union and fails this test.
+    """
+    horizons = (1, 5)
+    n_folds = 4
+    ordered = _ordered(panel)
+    head = SectorHeadForecaster(
+        horizons=horizons,
+        params=SectorHeadParams(n_estimators=20, max_depth=3),
+        n_folds=n_folds,
+        seed=7,
+    )
+    head.fit(ordered, return_oof=True)
+    oof = head.oof_predictions().reset_index(drop=True)
+    folds = rolling_ts_folds(ordered, time_col="period_close_ts", n_folds=n_folds)
+    val_union, earliest_rows = _val_union_and_earliest_block(ordered, n_folds=n_folds)
+
+    # Every val row is associated with a fold whose train is strictly earlier.
+    for _tr, va in folds:
+        if len(va) == 0 or len(_tr) == 0:
+            continue
+        assert ordered.iloc[_tr]["period_close_ts"].max() < ordered.iloc[va][
+            "period_close_ts"
+        ].min()
+
+    for h in horizons:
+        col = f"pred_sector_h{h}"
+        y = ordered[f"ret_h{h}"]
+        labeled_val = {i for i in val_union if pd.notna(y.iloc[i])}
+        finite_idx = {
+            int(i) for i in np.where(np.isfinite(oof[col].to_numpy(dtype=float)))[0]
+        }
+        assert finite_idx == labeled_val
+        assert earliest_rows.isdisjoint(finite_idx)
+        assert len(finite_idx) > 0
 
 
 def test_sector_head_predict_shape(panel: pd.DataFrame) -> None:

@@ -105,5 +105,8 @@ def write_metadata(
         extra=extra,
     )
     path = out / filename
-    path.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(meta, indent=2, sort_keys=True, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
     return path
