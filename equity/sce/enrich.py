@@ -9,8 +9,8 @@
             -> post-filter interaction levels to equity allow-list
             -> enriched frame (index preserved)
 
-S4.1/S4.2 equity SCE wrapper. Does NOT modify vendored ``sce/``. Interaction
-cardinality is bounded by post-filtering SCE output columns against
+S4.1/S4.2/S4.4 equity SCE wrapper. Does NOT modify vendored ``sce/``.
+Interaction cardinality is bounded by post-filtering SCE output columns against
 ``EquityHierarchyConfig.interactions`` (ADR 0001 interim strategy).
 
 Column naming contract (verified against sce/engine.py:_join_level_stats and
@@ -28,12 +28,18 @@ sce/stats.py StatsAggregator)::
 ``ret_1d`` target is PAST-ONLY: the enricher aliases ``ret_1d = ret_1d_log``
 from S3 ``add_returns`` (``log(close[t-1]/close[t-1-n]).shift(1)``). Never
 use ``close.pct_change()`` here (forward-looking leak).
+
+``transform_partial`` (S4.4) is PIT-safe: full re-fit of a dedicated
+non-cross-fitting engine on ``[train_start, refit_boundary_ts]``, then
+``transform`` of new rows strictly after the boundary. See method docstring
+for the engine.py line citation.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, List, Optional, Set, Union
 
@@ -183,6 +189,9 @@ class EquityContextEnricher:
         self._engine: Optional[StatisticalContextEngine] = None
         self._last_fold_timestamps: List[dict[str, Any]] = []
         self._prepared_index: Optional[pd.Index] = None
+        # Prepared frame from the last fit_transform; used by transform_partial
+        # to slice the fit window without re-running sector join / aliasing.
+        self._prepared_features: Optional[pd.DataFrame] = None
 
     # ------------------------------------------------------------------
     # sectors IO
@@ -235,6 +244,26 @@ class EquityContextEnricher:
         """Build the upstream :class:`~sce.ContextConfig` for this enricher."""
         return build_context_config(self.hierarchy)
 
+    def _build_refit_context_config(self) -> ContextConfig:
+        """Build a non-cross-fitting :class:`~sce.ContextConfig` for partial re-fit.
+
+        ``transform_partial`` fits on a known train window and transforms future
+        rows. Out-of-fold / rolling CF is not applicable (the fold concept is
+        for in-sample enrichment of the same frame). SCE ``fit()`` already
+        computes an in-sample ``_stats_dict`` regardless of
+        ``use_cross_fitting`` (see ``sce/engine.py`` ``fit`` ~L143-160 and
+        ``fit_transform`` ~L290-295 where CF only branches inside
+        ``fit_transform``), but we still force CF off here so the intent is
+        explicit and so a future engine change cannot silently alter partial
+        behaviour.
+        """
+        # ContextConfig is a stdlib dataclass (sce/config.py); replace is enough.
+        return replace(
+            self.build_context_config(),
+            use_cross_fitting=False,
+            cross_fit_strategy="off",
+        )
+
     def _allowed_levels(self) -> Set[str]:
         """Set of SCE level names that survive the post-filter.
 
@@ -272,7 +301,11 @@ class EquityContextEnricher:
         out = features.copy()
         # Preserve caller index explicitly (SCE fit_transform also preserves
         # it; we stash it so tests can assert against the prepared frame).
-        self._prepared_index = out.index.copy()
+        # pandas.DataFrame.merge drops the left index — restore after join so
+        # transform_partial / fit_transform keep the caller's index contract
+        # even when new_rows is a non-contiguous .loc slice.
+        original_index = out.index.copy()
+        self._prepared_index = original_index
 
         # 1. tz → UTC (mirror build.py _canonicalize_tz_utc).
         out = _canonicalize_tz_utc(out, self.hierarchy.time_col)
@@ -286,6 +319,8 @@ class EquityContextEnricher:
             out = out.drop(columns=drop_existing)
         out["ticker"] = out["ticker"].astype(str)
         out = out.merge(self._sectors_df, on="ticker", how="left", sort=False)
+        # left/sort=False keeps row order; reattach caller index post-merge.
+        out.index = original_index
         for col in _SECTOR_HIERARCHY_COLS:
             out[col] = out[col].fillna("unknown").astype(str)
 
@@ -369,12 +404,16 @@ class EquityContextEnricher:
         """Prepare ``features``, run rolling-CF SCE, post-filter interactions.
 
         Returns the enriched frame with the original input index preserved.
-        Side-effects: stores ``self._engine`` and
-        ``self._last_fold_timestamps`` (copied from the private SCE attr for
-        later diagnostics; treat as read-only).
+        Side-effects: stores ``self._engine``, ``self._prepared_features``
+        (for :meth:`transform_partial`), and ``self._last_fold_timestamps``
+        (copied from the private SCE attr for later diagnostics; treat as
+        read-only).
         """
         prepared = self._prepare(features)
         prepared_index = prepared.index.copy()
+        # Remember prepared panel so transform_partial can slice a fit window
+        # without re-joining sectors / recomputing time_bucket / ret_1d alias.
+        self._prepared_features = prepared
 
         cfg = self.build_context_config()
         engine = StatisticalContextEngine(cfg)
@@ -395,6 +434,148 @@ class EquityContextEnricher:
         self._last_fold_timestamps = list(
             getattr(engine, "_last_fold_timestamps", []) or []
         )
+        return out
+
+    # ------------------------------------------------------------------
+    # transform_partial (S4.4)
+    # ------------------------------------------------------------------
+    def transform_partial(
+        self,
+        new_rows: pd.DataFrame,
+        *,
+        refit_boundary_ts: Any,
+        train_start: Any = None,
+    ) -> pd.DataFrame:
+        """Re-fit SCE on ``[train_start, refit_boundary_ts]`` and transform new rows.
+
+        PIT-safe full re-fit (NOT incremental). Context stats joined onto
+        ``new_rows`` come ONLY from the fit window; the new rows themselves
+        never enter ``_stats_dict``.
+
+        Parameters
+        ----------
+        new_rows:
+            Features frame (same schema as :meth:`fit_transform` input) whose
+            ``period_close_ts`` values are strictly **after**
+            ``refit_boundary_ts``.
+        refit_boundary_ts:
+            Inclusive upper bound of the fit window
+            (``period_close_ts <= refit_boundary_ts``).
+        train_start:
+            Optional inclusive lower bound of the fit window. ``None`` (default)
+            = expanding window from the earliest prepared row.
+
+        Returns
+        -------
+        pd.DataFrame
+            ``new_rows`` enriched with post-filtered context columns. Index of
+            the prepared ``new_rows`` is preserved.
+
+        Raises
+        ------
+        RuntimeError
+            If :meth:`fit_transform` has not been called yet (no prepared panel
+            to slice the fit window from).
+        ValueError
+            If the fit window is empty, or any ``new_rows`` timestamp is not
+            strictly after ``refit_boundary_ts``.
+
+        Notes
+        -----
+        Engine behaviour (verified against ``sce/engine.py``):
+
+        * ``fit(X)`` (L143-160) always computes an in-sample ``_stats_dict`` on
+          all of ``X`` and sets ``_fitted=True``. It does **not** branch on
+          ``use_cross_fitting``.
+        * Cross-fitting only runs inside ``fit_transform`` when
+          ``use_cross_fitting=True`` (L290-295 → ``_fit_transform_cross_fitted``).
+        * ``transform(X)`` (L164+) joins the already-fitted ``_stats_dict`` onto
+          ``X`` without updating stats.
+
+        Therefore ``fit(window).transform(new_rows)`` is the correct PIT-safe
+        pattern: window stats are in-sample on the train set; new rows only
+        receive a join. We additionally force a non-CF :class:`ContextConfig`
+        via :meth:`_build_refit_context_config` so partial re-fit intent stays
+        explicit (``cross_fit_strategy='off'``, ``use_cross_fitting=False``).
+        """
+        if self._prepared_features is None:
+            raise RuntimeError(
+                "transform_partial requires fit_transform() first so the "
+                "prepared feature panel is available to slice the fit window. "
+                "Call enricher.fit_transform(features) before transform_partial."
+            )
+
+        time_col = self.hierarchy.time_col
+        prepared = self._prepared_features
+        boundary = pd.Timestamp(refit_boundary_ts)
+        # Match prepared tz (canonicalized to UTC in _prepare).
+        prepared_tz = prepared[time_col].dt.tz
+        if prepared_tz is not None and boundary.tzinfo is None:
+            boundary = boundary.tz_localize(prepared_tz)
+        elif prepared_tz is not None and boundary.tzinfo is not None:
+            boundary = boundary.tz_convert(prepared_tz)
+        elif prepared_tz is None and boundary.tzinfo is not None:
+            boundary = boundary.tz_convert("UTC").tz_localize(None)
+
+        fit_mask = prepared[time_col] <= boundary
+        if train_start is not None:
+            start = pd.Timestamp(train_start)
+            if prepared_tz is not None and start.tzinfo is None:
+                start = start.tz_localize(prepared_tz)
+            elif prepared_tz is not None and start.tzinfo is not None:
+                start = start.tz_convert(prepared_tz)
+            elif prepared_tz is None and start.tzinfo is not None:
+                start = start.tz_convert("UTC").tz_localize(None)
+            fit_mask = fit_mask & (prepared[time_col] >= start)
+
+        window_df = prepared.loc[fit_mask]
+        if window_df.empty:
+            raise ValueError(
+                f"transform_partial fit window is empty for "
+                f"refit_boundary_ts={boundary!r}, train_start={train_start!r}."
+            )
+        min_gs = self.hierarchy.min_group_size
+        if len(window_df) < min_gs:
+            logger.warning(
+                "transform_partial fit window has %d rows < min_group_size=%d; "
+                "many group levels will drop / back off to parent.",
+                len(window_df),
+                min_gs,
+            )
+
+        new_prepared = self._prepare(new_rows)
+        new_ts = new_prepared[time_col]
+        if not (new_ts > boundary).all():
+            bad = int((new_ts <= boundary).sum())
+            raise ValueError(
+                f"transform_partial requires all new_rows[{time_col!r}] > "
+                f"refit_boundary_ts ({boundary!r}); found {bad} row(s) on or "
+                "before the boundary (would leak future rows into enrichment "
+                "of past / on-boundary timestamps)."
+            )
+
+        # Full re-fit on the train window, then transform only the future rows.
+        # See method docstring for the engine.py fit/transform citation.
+        cfg = self._build_refit_context_config()
+        new_engine = StatisticalContextEngine(cfg)
+        new_engine.fit(window_df)
+        out = new_engine.transform(new_prepared)
+
+        # Prefer the caller's new_rows index (survives _prepare merge restore);
+        # fall back to prepared index if lengths match but identity differs.
+        caller_index = new_rows.index
+        if len(out) == len(caller_index) and not out.index.equals(caller_index):
+            out = out.copy()
+            out.index = caller_index.copy()
+        elif not out.index.equals(new_prepared.index):
+            out = out.copy()
+            out.index = new_prepared.index.copy()
+
+        out = self._post_filter_interactions(out)
+        # Store the refit engine for diagnostics (does not clobber CF engine
+        # from fit_transform unless the caller prefers the latest). Keep the
+        # CF engine as self._engine from fit_transform; expose refit separately.
+        self._partial_engine = new_engine
         return out
 
 
