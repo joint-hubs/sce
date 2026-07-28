@@ -139,6 +139,70 @@ def test_missing_required_keys_raises() -> None:
         run_walk_forward_monotonicity([{"train_max": "2020-01-01"}])
 
 
+def test_between_fold_overlap_fails() -> None:
+    """Overlapping val windows across folds must fail between-fold check."""
+    folds = [
+        {
+            "train_max": "2020-01-01",
+            "val_min": "2020-01-02",
+            "val_max": "2020-04-01",  # overlaps next val
+        },
+        {
+            "train_max": "2020-03-01",
+            "val_min": "2020-03-02",  # starts before prev val_max
+            "val_max": "2020-06-01",
+        },
+    ]
+    result = run_walk_forward_monotonicity(folds)
+    assert result["pass"] is False
+    reasons = {v["reason"] for v in result["violations"]}
+    assert "val_max_after_next_val_min" in reasons
+
+
+def test_between_fold_reverse_order_fails() -> None:
+    """Reverse-ordered val windows must fail between-fold progression."""
+    folds = [
+        {
+            "train_max": "2020-06-01",
+            "val_min": "2020-06-02",
+            "val_max": "2020-09-01",
+        },
+        {
+            "train_max": "2020-01-01",
+            "val_min": "2020-01-02",
+            "val_max": "2020-03-01",
+        },
+    ]
+    result = run_walk_forward_monotonicity(folds)
+    assert result["pass"] is False
+    reasons = {v["reason"] for v in result["violations"]}
+    assert "val_max_after_next_val_min" in reasons
+
+
+def test_between_fold_forward_progression_passes() -> None:
+    """Non-overlapping forward-progressing vals pass (including gap=0)."""
+    folds = [
+        {
+            "train_max": "2020-01-01",
+            "val_min": "2020-01-02",
+            "val_max": "2020-03-01",
+        },
+        {
+            "train_max": "2020-03-01",
+            "val_min": "2020-03-01",  # gap=0 between folds allowed non-strict
+            "val_max": "2020-06-01",
+        },
+        {
+            "train_max": "2020-06-01",
+            "val_min": "2020-06-02",
+            "val_max": "2020-09-01",
+        },
+    ]
+    result = run_walk_forward_monotonicity(folds)
+    assert result["pass"] is True
+    assert result["n_violations"] == 0
+
+
 def test_cli_inline_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from equity.diagnostics import walk_forward_monotonicity as mod
 

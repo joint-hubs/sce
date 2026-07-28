@@ -12,6 +12,11 @@ window ends at or before the validation window starts (``train_max <= val_min``;
 present, that validation ends at or before the test window starts
 (``val_max <= test_min`` / strict ``<``).
 
+Also asserts **between-fold progression**: for consecutive folds ``i`` and
+``i+1``, ``fold[i].val_max <= fold[i+1].val_min`` (non-strict; strict uses
+``<``). This rejects overlapping validation windows and reverse-ordered fold
+sequences that would otherwise pass the within-fold checks alone.
+
 Accepts either an explicit fold list::
 
     {train_start?, train_max, val_min, val_max, test_min?, test_max?}
@@ -125,7 +130,8 @@ def run_walk_forward_monotonicity(
         :func:`normalize_folds`).
     strict:
         When True, require strict inequalities (``train_max < val_min``,
-        ``val_max < test_min``). Default allows equality (gap=0 per PRD §8.1).
+        ``val_max < test_min``, and between-fold ``val_max < next.val_min``).
+        Default allows equality (gap=0 per PRD §8.1).
 
     Returns
     -------
@@ -188,6 +194,37 @@ def run_walk_forward_monotonicity(
                         }
                     )
 
+    # Between-fold progression: each fold's val window must end at or before
+    # the next fold's val window starts. Rejects overlapping or reverse-ordered
+    # val sequences that pass within-fold checks alone.
+    for i in range(len(normalized) - 1):
+        cur_val_max = normalized[i]["val_max"]
+        next_val_min = normalized[i + 1]["val_min"]
+        if strict:
+            if not (cur_val_max < next_val_min):
+                violations.append(
+                    {
+                        "fold_idx": i,
+                        "next_fold_idx": i + 1,
+                        "reason": "val_max_not_before_next_val_min",
+                        "val_max": str(cur_val_max),
+                        "next_val_min": str(next_val_min),
+                        "strict": True,
+                    }
+                )
+        else:
+            if not (cur_val_max <= next_val_min):
+                violations.append(
+                    {
+                        "fold_idx": i,
+                        "next_fold_idx": i + 1,
+                        "reason": "val_max_after_next_val_min",
+                        "val_max": str(cur_val_max),
+                        "next_val_min": str(next_val_min),
+                        "strict": False,
+                    }
+                )
+
     n_violations = len(violations)
     return {
         "pass": n_violations == 0,
@@ -220,7 +257,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Walk-forward monotonicity guard (S4.5): asserts train_max <= val_min "
-            "(and val_max <= test_min when present) for each fold. Accepts SCE "
+            "(and val_max <= test_min when present) for each fold, plus between-fold "
+            "val progression (fold[i].val_max <= fold[i+1].val_min). Accepts SCE "
             "_last_fold_timestamps shape. Exits 0 on PASS, 1 on any violation."
         ),
     )

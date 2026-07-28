@@ -92,15 +92,20 @@ def enriched_bundle():
 
 def test_output_has_ret_1d_alias(enriched_bundle) -> None:
     out = enriched_bundle["out"]
+    features = enriched_bundle["features"]
     assert "ret_1d" in out.columns
-    # Alias equals the past-only source column where both are non-null.
-    both = out["ret_1d"].notna() & out["ret_1d_log"].notna()
-    assert both.any()
-    pd.testing.assert_series_equal(
-        out.loc[both, "ret_1d"],
-        out.loc[both, "ret_1d_log"],
-        check_names=False,
-    )
+    # Source alias MUST be dropped after prepare so it cannot leak into
+    # select_dtypes / Ridge design matrices as a silent target copy.
+    assert "ret_1d_log" not in out.columns
+    # Where the source was non-null, ret_1d equals the past-only log return.
+    if "ret_1d_log" in features.columns:
+        both = out["ret_1d"].notna() & features["ret_1d_log"].notna()
+        assert both.any()
+        pd.testing.assert_series_equal(
+            out.loc[both, "ret_1d"],
+            features.loc[both, "ret_1d_log"],
+            check_names=False,
+        )
 
 
 def test_context_columns_present(enriched_bundle) -> None:

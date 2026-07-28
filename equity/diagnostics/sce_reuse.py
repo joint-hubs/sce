@@ -42,8 +42,9 @@ The four diagnostics thin wrappers mirror the scripts counterparts:
 * :func:`run_permuted_target_equity` — permute target, average SCE advantage;
   ``pass = permuted_mean_advantage < 1.0``.
 * :func:`run_shuffled_groups_equity` — shuffle categorical labels;
-  ``pass = real_advantage >= 50% of (real - shuffled)`` (same threshold math
-  as ``scripts/diagnostics/shuffled_groups.py``).
+  ``pass = (real_advantage - shuffled_mean) > 0.5 * real_advantage``
+  i.e. ``shuffled_mean < 0.5 * real_advantage`` when ``real_advantage > 0``
+  (same threshold math as ``scripts/diagnostics/shuffled_groups.py``).
 * :func:`run_crossfit_ab_equity` — CF on vs off;
   ``leakage_signal_pp = (rmse_no_cf - rmse_cf) / rmse_no_cf * 100``.
 * :func:`audit_feature_dominance_equity` — re-exports
@@ -84,14 +85,30 @@ def _numeric_feature_cols(
     time_col: str,
     extra_exclude: Iterable[str] = (),
 ) -> list[str]:
-    """Select numeric columns suitable as model features (exclude target/time/id)."""
+    """Select numeric columns suitable as model features (exclude target/time/id).
+
+    Also drops any numeric column that is byte-identical to the target (e.g. a
+    lingering ``ret_1d_log`` alias of ``ret_1d``) so Ridge baselines / diagnostics
+    cannot silently train on the label.
+    """
     exclude = set(_IDENTITY_COLS) | {target_col, time_col} | set(extra_exclude)
+    # Known equity target-alias sources (defense-in-depth even if enricher drops them).
+    if target_col == "ret_1d":
+        exclude.add("ret_1d_log")
+
+    target_vals = df[target_col] if target_col in df.columns else None
     cols: list[str] = []
     for c in df.columns:
         if c in exclude:
             continue
-        if pd.api.types.is_numeric_dtype(df[c]):
-            cols.append(c)
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        # Drop columns that are element-wise equal to the target (including NaN
+        # positions) — robust against unknown alias names.
+        if target_vals is not None and len(df[c]) == len(target_vals):
+            if df[c].equals(target_vals):
+                continue
+        cols.append(c)
     return cols
 
 
@@ -153,7 +170,8 @@ def evaluate_equity_sce(
         Override SCE cross-fitting. ``None`` keeps the hierarchy default
         (rolling CF on). ``False`` forces non-CF fit for the A/B diagnostic.
     test_frac:
-        Fraction of rows (time-ordered) held out as the test split.
+        Fraction of **unique timestamps** (time-ordered) held out as the test
+        split. Split is by timestamp group, never mid-day across tickers.
     random_state:
         Seed for the Ridge estimator (determinism only; split is time-ordered).
 
@@ -180,14 +198,24 @@ def evaluate_equity_sce(
 
     time_col = hierarchy.time_col
     prepared = prepared.sort_values(time_col).reset_index(drop=True)
-    n = len(prepared)
-    split_idx = max(1, min(n - 1, int(round(n * (1.0 - test_frac)))))
-    train_df = prepared.iloc[:split_idx].copy()
-    test_df = prepared.iloc[split_idx:].copy()
+    # Split on unique timestamps so a boundary day is never cut mid-cross-section
+    # (row-iloc would put some tickers of the split day in train and some in test,
+    # letting SCE _stats_dict join same-ts cross-ticker info onto the test leg).
+    unique_ts = pd.Index(prepared[time_col].drop_duplicates().sort_values())
+    n_ts = len(unique_ts)
+    if n_ts < 2:
+        raise ValueError(
+            f"evaluate_equity_sce: need >= 2 distinct timestamps to split; got {n_ts}."
+        )
+    split_idx = max(1, min(n_ts - 1, int(round(n_ts * (1.0 - test_frac)))))
+    split_day = unique_ts[split_idx]
+    train_df = prepared.loc[prepared[time_col] < split_day].copy()
+    test_df = prepared.loc[prepared[time_col] >= split_day].copy()
     if train_df.empty or test_df.empty:
         raise ValueError(
-            f"evaluate_equity_sce: empty train/test after split "
-            f"(n={n}, split_idx={split_idx}, test_frac={test_frac})."
+            f"evaluate_equity_sce: empty train/test after timestamp-group split "
+            f"(n_ts={n_ts}, split_idx={split_idx}, split_day={split_day}, "
+            f"test_frac={test_frac})."
         )
 
     cfg = enricher.build_context_config()

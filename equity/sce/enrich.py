@@ -187,6 +187,7 @@ class EquityContextEnricher:
         self.hierarchy = hierarchy
         self._sectors_df = self._load_sectors(sectors)
         self._engine: Optional[StatisticalContextEngine] = None
+        self._partial_engine: Optional[StatisticalContextEngine] = None
         self._last_fold_timestamps: List[dict[str, Any]] = []
         self._prepared_index: Optional[pd.Index] = None
         # Prepared frame from the last fit_transform; used by transform_partial
@@ -332,15 +333,20 @@ class EquityContextEnricher:
         out["time_bucket"] = ts_naive.dt.to_period("M").astype(str)
 
         # 4. target alias: ret_1d ← ret_1d_log (past-only; see module docstring).
+        # After aliasing, DROP ret_1d_log so it cannot leak into select_dtypes /
+        # Ridge design matrices as a silent byte-identical copy of the target.
         target = self.hierarchy.target_col
-        if target == "ret_1d" and "ret_1d" not in out.columns:
-            if "ret_1d_log" not in out.columns:
-                raise ValueError(
-                    "target alias requested (ret_1d) but neither 'ret_1d' nor "
-                    "'ret_1d_log' is present on the features frame. Run "
-                    "equity.features.build_features first."
-                )
-            out["ret_1d"] = out["ret_1d_log"]
+        if target == "ret_1d":
+            if "ret_1d" not in out.columns:
+                if "ret_1d_log" not in out.columns:
+                    raise ValueError(
+                        "target alias requested (ret_1d) but neither 'ret_1d' nor "
+                        "'ret_1d_log' is present on the features frame. Run "
+                        "equity.features.build_features first."
+                    )
+                out["ret_1d"] = out["ret_1d_log"]
+            if "ret_1d_log" in out.columns:
+                out = out.drop(columns=["ret_1d_log"])
 
         # 5. assert target present.
         if target not in out.columns:
