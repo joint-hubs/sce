@@ -421,6 +421,10 @@ def run_walk_forward(
                 "n_train": int(len(train)),
                 "n_val": int(len(val)),
                 "n_test": int(len(test)),
+                # Feature width of the model-ready train frame (post SCE / labels /
+                # sector). Exposed so callers can confirm the SCE leg actually
+                # ran (sce_enrich=True yields more columns than sce_enrich=False).
+                "n_features": int(len(train.columns)),
             }
         )
 
@@ -461,6 +465,7 @@ def run_walk_forward(
     return {
         "out_dir": str(dest),
         "n_folds": int(len(folds)),
+        "sce_enrich": bool(sce_enrich),
         "folds": folds,
         "fold_predictions_val": fold_preds_val,
         "fold_predictions_test": fold_preds_test,
