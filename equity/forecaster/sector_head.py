@@ -189,17 +189,16 @@ class SectorHeadForecaster:
         if "ticker" in ordered.columns:
             out["ticker"] = ordered["ticker"].to_numpy()
 
+        X, _ = make_design_matrix(
+            ordered,
+            feature_cols=self.feature_cols_,
+            sector_col=self.sector_col,
+        )
+        # Align categories with the fitted booster's training view where possible.
+        if self.sector_col in X.columns:
+            X[self.sector_col] = X[self.sector_col].astype("category")
+
         for h, model in self.models_.items():
-            X, _ = make_design_matrix(
-                ordered,
-                feature_cols=self.feature_cols_,
-                sector_col=self.sector_col,
-            )
-            # Align categories with the fitted booster's training view where possible.
-            if self.sector_col in X.columns:
-                # Pull categories from the model's feature dive is unreliable;
-                # just cast — unseen cats become -1 codes under XGBoost hist.
-                X[self.sector_col] = X[self.sector_col].astype("category")
             out[f"pred_sector_h{h}"] = model.predict(X)
         return out
 
