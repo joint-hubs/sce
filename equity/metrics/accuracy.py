@@ -7,7 +7,7 @@
             -> scalar accuracy / per-horizon mean±std across folds
 
 NaN-safe point-forecast accuracy helpers used by the walk-forward runner (S6.2).
-Sharpe / Sortino / decile portfolio metrics live in a later slice (S6.3).
+Sharpe / Sortino / decile portfolio metrics live in :mod:`equity.metrics.sharpe` (S6.3).
 """
 
 from __future__ import annotations

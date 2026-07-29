@@ -1,20 +1,22 @@
 """
 @module: equity.forecaster.run_walk_forward
-@depends: pandas, equity.forecaster.*, equity.metrics.accuracy, equity.sce.enrich
+@depends: pandas, equity.forecaster.*, equity.metrics.accuracy,
+          equity.metrics.sharpe, equity.sce.enrich
 @exports: run_walk_forward, main
-@paper_ref: docs/plan/2026-07-27_trading_forecaster_prd.md §8 / S6.1 + S6.2
+@paper_ref: docs/plan/2026-07-27_trading_forecaster_prd.md §8 / S6.1–S6.3
 @data_flow: prices [+ features] -> walk-forward folds -> per-fold SCE refit
             -> sector+residual+quantile -> predictions_h{N}.parquet + metadata.json
 
-S6.1 walk-forward backtest runner + S6.2 per-horizon accuracy metrics. Per fold
-the pipeline mirrors ``run_smoke`` (targets after SCE, price-derived labels) but
+S6.1 walk-forward backtest runner + S6.2 per-horizon accuracy metrics (TEST) +
+S6.3 decile portfolio Sharpe/Sortino + horizon selection (VAL). Per fold the
+pipeline mirrors ``run_smoke`` (targets after SCE, price-derived labels) but
 uses a sliding train/val/test geometry and optionally re-fits
 :class:`EquityContextEnricher` PIT-safely on the train slice only.
 
 Artifact layout under ``out_dir``::
 
     fold_{k:02d}/predictions_h{N}.parquet   # val+test rows, ``split`` column tags slice
-    metadata.json                           # walk_forward + metrics + mono gate
+    metadata.json                           # walk_forward + metrics + chosen_horizon
 
 Entry point::
 
@@ -43,6 +45,7 @@ from equity.forecaster.residual import InstrumentResidualForecaster
 from equity.forecaster.sector_head import SectorHeadForecaster
 from equity.forecaster.targets import add_forward_targets, forward_target_col
 from equity.metrics.accuracy import aggregate_accuracy
+from equity.metrics.sharpe import aggregate_portfolio
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = PROJECT_ROOT / "results" / "forecaster" / "walk_forward"
@@ -216,7 +219,7 @@ def run_walk_forward(
     git_sha: Optional[str] = None,
     created_at: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Run multi-fold walk-forward of the two-layer + quantile heads (S6.1/S6.2).
+    """Run multi-fold walk-forward of the two-layer + quantile heads (S6.1–S6.3).
 
     Parameters
     ----------
@@ -244,7 +247,8 @@ def run_walk_forward(
     -------
     dict
         ``{out_dir, n_folds, folds, fold_predictions_val, fold_predictions_test,
-        metrics, metadata, metadata_path, prediction_paths, monotonicity}``.
+        metrics, portfolio, chosen_horizon, metadata, metadata_path,
+        prediction_paths, monotonicity}``.
     """
     cfg = cfg or WalkForwardConfig()
     horizons = tuple(int(h) for h in cfg.horizons)
@@ -429,10 +433,25 @@ def run_walk_forward(
         )
 
     metrics_raw = aggregate_accuracy(fold_preds_test, horizons)
-    # JSON keys must be strings; values NaN-safe.
-    metrics_meta = {
-        str(h): _json_safe(vals) for h, vals in metrics_raw.items()
-    }
+    # S6.3: VAL-slice decile long/short Sharpe/Sortino + horizon selection.
+    portfolio = aggregate_portfolio(
+        fold_preds_val,
+        horizons,
+        criterion="sharpe",
+        periods_per_year=252,
+        time_col=time_col,
+    )
+    chosen_horizon = int(portfolio["chosen_horizon"])
+
+    # Merge TEST accuracy with VAL portfolio scores into metrics[h].
+    metrics_meta: Dict[str, Any] = {}
+    for h in horizons:
+        h = int(h)
+        acc = dict(metrics_raw.get(h) or {})
+        port_h = (portfolio.get("per_horizon") or {}).get(h) or {}
+        acc["sharpe"] = port_h.get("sharpe", float("nan"))
+        acc["sortino"] = port_h.get("sortino", float("nan"))
+        metrics_meta[str(h)] = _json_safe(acc)
 
     mono_meta = _json_safe(mono)
     sha = git_sha if git_sha is not None else collect_git_sha(PROJECT_ROOT)
@@ -449,6 +468,7 @@ def run_walk_forward(
             "monotonicity": mono_meta,
         },
         "metrics": metrics_meta,
+        "chosen_horizon": chosen_horizon,
     }
     meta_path = write_metadata(
         dest,
@@ -470,6 +490,8 @@ def run_walk_forward(
         "fold_predictions_val": fold_preds_val,
         "fold_predictions_test": fold_preds_test,
         "metrics": metrics_raw,
+        "portfolio": portfolio,
+        "chosen_horizon": chosen_horizon,
         "monotonicity": mono,
         "prediction_paths": written,
         "metadata_path": str(meta_path),
@@ -480,9 +502,9 @@ def run_walk_forward(
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "S6.1 walk-forward: sector-head + residual + quantile heads per fold. "
+            "S6 walk-forward: sector-head + residual + quantile heads per fold. "
             "Writes fold_XX/predictions_h{N}.parquet and metadata.json "
-            "(includes S6.2 per-horizon accuracy metrics)."
+            "(S6.2 TEST accuracy + S6.3 VAL Sharpe/Sortino + chosen_horizon)."
         )
     )
     parser.add_argument(
@@ -555,6 +577,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "prediction_paths": result["prediction_paths"],
         "metadata_path": result["metadata_path"],
         "run_grade": result["metadata"].get("run_grade"),
+        "chosen_horizon": result["metadata"].get("chosen_horizon"),
         "metrics": result["metadata"].get("metrics"),
         "walk_forward": {
             k: result["metadata"]["walk_forward"][k]
