@@ -144,15 +144,18 @@ def test_wf_sce_artifacts_on_disk(wf_sce_result) -> None:
             assert np.isfinite(df[f"pred_h{h}"].to_numpy(dtype=float)).any()
 
 
-def test_wf_sce_leg_actually_ran(wf_sce_result, wf_nosce_result) -> None:
+def test_wf_sce_leg_actually_ran(wf_sce_result, wf_nosce_result, long_panel, sectors_fixture) -> None:
     """The SCE leg must change outputs vs the no-SCE leg.
 
-    Two independent sanity signals:
+    Both legs now share the same ``build_features`` base (fair A/B); the only
+    difference is SCE context enrichment. Three independent sanity signals:
+
       1. Per-fold feature width (``n_features``) is strictly larger with SCE
-         (SCE appends context columns; the no-SCE leg keeps raw OHLCV + sector).
-      2. At least one prediction column differs in value between the two legs
-         (confirms the SCE columns actually reached the trained models, not just
-         that the frame was wider).
+         (SCE appends context columns on top of the shared build_features panel).
+      2. SCE context columns are present in the enriched design matrix and absent
+         from the baseline (proves SCE context actually reached the model, not
+         just that frames differ).
+      3. At least one prediction column differs in value between the two legs.
     """
     sce_bounds = wf_sce_result["metadata"]["walk_forward"]["fold_bounds"]
     nosce_bounds = wf_nosce_result["metadata"]["walk_forward"]["fold_bounds"]
@@ -161,8 +164,34 @@ def test_wf_sce_leg_actually_ran(wf_sce_result, wf_nosce_result) -> None:
     for sf, nf in zip(sce_bounds, nosce_bounds):
         assert sf["n_features"] > nf["n_features"], (
             f"SCE fold {sf['fold_idx']} n_features={sf['n_features']} "
-            f"not greater than no-SCE {nf['n_features']}"
+            f"not greater than baseline {nf['n_features']} "
+            f"(both on build_features base; SCE must add context columns)"
         )
+
+    # SCE context columns must be present in the enriched design matrix and
+    # absent from the baseline (proves SCE context reached the model).
+    from equity.features.build import build_features
+    from equity.sce import EquityContextEnricher, EquityHierarchyConfig
+    from equity.sce.enrich import _level_from_context_column
+
+    features = build_features(long_panel)
+    # Baseline features: no SCE context columns expected.
+    base_sce_cols = [
+        c for c in features.columns if _level_from_context_column(c, "ret_1d") is not None
+    ]
+    assert len(base_sce_cols) == 0, (
+        f"Baseline build_features unexpectedly has SCE context columns: {base_sce_cols}"
+    )
+
+    enricher = EquityContextEnricher(
+        hierarchy=EquityHierarchyConfig(),
+        sectors=sectors_fixture,
+    )
+    enriched = enricher.fit_transform(features)
+    sce_cols = [
+        c for c in enriched.columns if _level_from_context_column(c, "ret_1d") is not None
+    ]
+    assert len(sce_cols) > 0, "No SCE context columns found in enriched features"
 
     # Prediction values must differ on at least one fold/horizon.
     differs = False
@@ -187,7 +216,7 @@ def test_wf_sce_leg_actually_ran(wf_sce_result, wf_nosce_result) -> None:
                 break
         if differs:
             break
-    assert differs, "SCE predictions identical to no-SCE — SCE leg did not run"
+    assert differs, "SCE predictions identical to baseline — SCE leg did not run"
 
 
 def test_wf_sce_metrics_present(wf_sce_result) -> None:

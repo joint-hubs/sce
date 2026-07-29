@@ -175,6 +175,10 @@ class WalkForwardConfig:
             raise ValueError("horizons must be non-empty")
         if any(int(h) < 1 for h in self.horizons):
             raise ValueError(f"every horizon must be >= 1; got {self.horizons}")
+        if not self.quantiles:
+            raise ValueError("quantiles must be non-empty")
+        if any(not (0.0 < float(q) < 1.0) for q in self.quantiles):
+            raise ValueError(f"every quantile must be in (0, 1); got {self.quantiles}")
 
     def to_horizon_config(self) -> HorizonConfig:
         """Map walk-forward knobs onto the shared :class:`HorizonConfig`."""

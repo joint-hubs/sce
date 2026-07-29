@@ -13,6 +13,15 @@ pipeline mirrors ``run_smoke`` (targets after SCE, price-derived labels) but
 uses a sliding train/val/test geometry and optionally re-fits
 :class:`EquityContextEnricher` PIT-safely on the train slice only.
 
+When ``features is None`` and ``ablated_features=False`` (default), both legs
+use the same ``build_features(prices)`` rich technical panel; the **only**
+difference between ``sce_enrich=True`` and ``sce_enrich=False`` is SCE context
+enrichment. This satisfies S6.4 fair A/B.
+
+When ``ablated_features=True`` and ``features is None``, both legs fall back to
+``_minimal_features_from_prices`` (OHLCV-only). This is a debug/ablation mode
+and NOT the fair A/B default.
+
 Artifact layout under ``out_dir``::
 
     fold_{k:02d}/predictions_h{N}.parquet   # val+test rows, ``split`` column tags slice
@@ -37,7 +46,7 @@ import numpy as np
 import pandas as pd
 
 from equity.diagnostics.walk_forward_monotonicity import run_walk_forward_monotonicity
-from equity.forecaster._splits import WalkForwardFold, walk_forward_folds
+from equity.forecaster._splits import walk_forward_folds
 from equity.forecaster.config import WalkForwardConfig
 from equity.forecaster.metadata import collect_git_sha, config_hash, write_metadata
 from equity.forecaster.quantile import QuantileHeadForecaster
@@ -216,6 +225,7 @@ def run_walk_forward(
     *,
     out_dir: str | Path | None = None,
     sce_enrich: bool = True,
+    ablated_features: bool = False,
     git_sha: Optional[str] = None,
     created_at: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -226,9 +236,12 @@ def run_walk_forward(
     prices:
         S1 prices panel (``ticker``, ``period_close_ts``, ``close``).
     features:
-        Optional pre-built feature matrix (S3). When ``sce_enrich=True`` this is
-        the *pre-SCE* frame that is re-fit per fold. When ``sce_enrich=False``
-        this is used as-is (or a minimal OHLCV block is derived from ``prices``).
+        Optional pre-built feature matrix (S3). When ``features is None`` and
+        ``ablated_features=False`` (default), both ``sce_enrich`` legs use
+        ``build_features(prices)`` so the only difference is SCE context
+        enrichment (fair A/B, S6.4). When ``ablated_features=True`` and
+        ``features is None``, both legs use ``_minimal_features_from_prices``
+        (OHLCV-only debug/ablation mode).
     sectors:
         Optional ``(ticker, sector[, industry, mktcap_bucket])`` frame.
     cfg:
@@ -240,6 +253,10 @@ def run_walk_forward(
         When True, re-fit :class:`EquityContextEnricher` on each fold's train
         slice and transform val/test (PIT-safe). Requires usable feature inputs
         (passed ``features`` or built via ``build_features``).
+    ablated_features:
+        When True AND ``features is None``, use ``_minimal_features_from_prices``
+        (OHLCV-only) for BOTH legs. This is a debug/ablation mode; the default
+        ``False`` is the fair A/B path (both legs use ``build_features``).
     git_sha / created_at:
         Overridable for tests; defaults from git / UTC now.
 
@@ -261,16 +278,30 @@ def run_walk_forward(
     priced = add_forward_targets(prices, horizons=horizons, time_col=time_col, ticker_col=ticker_col)
 
     if features is None:
-        if sce_enrich:
+        if ablated_features:
+            base_features = _minimal_features_from_prices(priced)
+        else:
             from equity.features.build import build_features
 
             base_features = build_features(prices)
-        else:
-            base_features = _minimal_features_from_prices(priced)
     else:
         base_features = features.copy()
 
     base_features = _ensure_sector(base_features, sectors)
+
+    # Pre-flight: when SCE is on, sectors must carry the full hierarchy columns
+    # (EquityContextEnricher._load_sectors requires ticker, sector, industry,
+    # mktcap_bucket).  Fail early before the fold loop so the user sees a clear
+    # message instead of a deep internal crash.
+    if sce_enrich and sectors is not None:
+        _SCE_REQUIRED_COLS = {"ticker", "sector", "industry", "mktcap_bucket"}
+        missing = _SCE_REQUIRED_COLS - set(sectors.columns)
+        if missing:
+            raise ValueError(
+                f"sectors frame missing required columns for SCE enrichment: "
+                f"{sorted(missing)}. Required: {sorted(_SCE_REQUIRED_COLS)}. "
+                f"Got: {list(sectors.columns)}"
+            )
 
     # Fold geometry on the (unique timestamp) axis of the feature panel.
     folds = walk_forward_folds(base_features, cfg, time_col=time_col)
@@ -520,7 +551,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--sectors",
         default=None,
-        help="Optional sectors CSV/parquet (ticker, sector).",
+        help="Optional sectors CSV/parquet. SCE enrichment requires columns: "
+        "ticker, sector, industry, mktcap_bucket.",
     )
     parser.add_argument(
         "--output",
@@ -533,6 +565,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--no-sce",
         action="store_true",
         help="Skip per-fold SCE enrich (use raw features / OHLCV only).",
+    )
+    parser.add_argument(
+        "--ablated-features",
+        action="store_true",
+        default=False,
+        help="Debug/ablation mode: when features are not provided, use OHLCV-only "
+        "features on BOTH legs instead of the full build_features panel. "
+        "Do NOT use for fair A/B comparisons.",
     )
     parser.add_argument("--train-window", type=int, default=1260)
     parser.add_argument("--val-window", type=int, default=63)
@@ -570,6 +610,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cfg=cfg,
         out_dir=out_dir,
         sce_enrich=not bool(args.no_sce),
+        ablated_features=bool(args.ablated_features),
     )
     summary = {
         "out_dir": result["out_dir"],

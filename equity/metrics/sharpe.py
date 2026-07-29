@@ -217,6 +217,10 @@ def select_horizon(
       * a ``{h: frame}`` mapping, or
       * a sequence of per-fold ``{h: frame}`` mappings (concatenated).
 
+    ``criterion`` values: ``"sharpe"`` / ``"sortino"`` are annualized (via
+    ``periods_per_year``); ``"hit_rate"`` is a raw fraction in [0, 1] (not
+    annualized).
+
     Ties break toward the **smallest** horizon. Horizons with non-finite scores
     are ignored; if every score is non-finite, returns the smallest horizon.
     """

@@ -90,9 +90,14 @@ def test_bvs_fold_bounds_identical(bvs_result) -> None:
     sce_b = bvs_result["sce"]["metadata"]["walk_forward"]["fold_bounds"]
     base_b = bvs_result["baseline"]["metadata"]["walk_forward"]["fold_bounds"]
     assert _geometry_keys(sce_b) == _geometry_keys(base_b)
-    # SCE must actually enrich (wider feature set).
+    # SCE must actually enrich (wider feature set) — both legs now share the
+    # same build_features base (fair A/B), so the gap is SCE context columns only.
     for sb, bb in zip(sce_b, base_b):
-        assert sb["n_features"] > bb["n_features"]
+        assert sb["n_features"] > bb["n_features"], (
+            f"SCE fold {sb['fold_idx']} n_features={sb['n_features']} "
+            f"not greater than baseline {bb['n_features']} "
+            f"(both on build_features base; SCE must add context columns)"
+        )
 
 
 def test_bvs_reports_exist(bvs_result) -> None:
@@ -187,6 +192,37 @@ def test_bvs_deltas_finite(bvs_result) -> None:
             assert math.isfinite(float(v)), (hkey, k, v)
             any_finite = True
     assert any_finite, "expected at least one finite delta"
+
+
+def test_bvs_sce_context_columns_present(long_panel, sectors_fixture) -> None:
+    """SCE enriched design matrix must contain SCE context columns.
+
+    Both legs now share the same ``build_features`` base (fair A/B); the SCE leg
+    differs ONLY by SCE context columns. This test proves those columns exist
+    and follow the naming contract ``{level}_ret_1d_{stat}``.
+    """
+    from equity.features.build import build_features
+    from equity.sce import EquityContextEnricher, EquityHierarchyConfig
+    from equity.sce.enrich import _level_from_context_column
+
+    features = build_features(long_panel)
+    # Baseline: no SCE context columns.
+    base_sce_cols = [
+        c for c in features.columns if _level_from_context_column(c, "ret_1d") is not None
+    ]
+    assert len(base_sce_cols) == 0, (
+        f"Baseline build_features unexpectedly has SCE context columns: {base_sce_cols}"
+    )
+
+    enricher = EquityContextEnricher(
+        hierarchy=EquityHierarchyConfig(),
+        sectors=sectors_fixture,
+    )
+    enriched = enricher.fit_transform(features)
+    sce_cols = [
+        c for c in enriched.columns if _level_from_context_column(c, "ret_1d") is not None
+    ]
+    assert len(sce_cols) > 0, "No SCE context columns found in enriched features"
 
 
 def test_bvs_baseline_leg_forward_target_isolation(
