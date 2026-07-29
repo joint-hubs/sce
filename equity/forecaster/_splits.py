@@ -20,7 +20,7 @@ import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 
 # Columns whose name starts with any of these MUST never enter a design matrix
-# as a feature. Predictions (``pred_*``) are also blocked;} residual injects
+# as a feature. Predictions (``pred_*``) are also blocked; residual injects
 # ``pred_sector_hN`` explicitly after the design-matrix build.
 FEATURE_BLOCKLIST_PREFIXES: Tuple[str, ...] = (
     "ret_h",  # forward targets
