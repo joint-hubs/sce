@@ -19,12 +19,14 @@ __all__ = [
     "ResidualHeadParams",
     "QuantileHeadParams",
     "SmokeConfig",
+    "WalkForwardConfig",
     "add_forward_targets",
     "forward_target_col",
     "SectorHeadForecaster",
     "InstrumentResidualForecaster",
     "QuantileHeadForecaster",
     "run_smoke",
+    "run_walk_forward",
     "write_metadata",
 ]
 
@@ -36,6 +38,7 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
         "ResidualHeadParams",
         "QuantileHeadParams",
         "SmokeConfig",
+        "WalkForwardConfig",
     }:
         from equity.forecaster import config as _cfg
 
@@ -60,6 +63,10 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
         from equity.forecaster.run_smoke import run_smoke
 
         return run_smoke
+    if name == "run_walk_forward":
+        from equity.forecaster.run_walk_forward import run_walk_forward
+
+        return run_walk_forward
     if name == "write_metadata":
         from equity.forecaster.metadata import write_metadata
 

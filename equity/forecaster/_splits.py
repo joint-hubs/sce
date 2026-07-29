@@ -1,9 +1,11 @@
 """
 @module: equity.forecaster._splits
 @depends: numpy, pandas, sklearn
-@exports: ts_group_split, rolling_ts_folds, make_design_matrix, FEATURE_BLOCKLIST_PREFIXES
+@exports: ts_group_split, rolling_ts_folds, walk_forward_folds, WalkForwardFold,
+          make_design_matrix, FEATURE_BLOCKLIST_PREFIXES
 @paper_ref: docs/plan/2026-07-27_trading_forecaster_prd.md §9.3 / FOC-51 R1 ts-group
 @data_flow: frame[time_col] -> unique timestamps -> train/test or rolling OOF folds
+            or walk-forward train/val/test folds (S6.1)
 
 Internal helpers shared by the sector / residual / quantile heads.
 
@@ -13,7 +15,8 @@ cross-section (FOC-51 R1). Mirrors ``equity.diagnostics.sce_reuse`` lines 204-21
 
 from __future__ import annotations
 
-from typing import Iterable, List, Optional, Sequence, Tuple
+from dataclasses import dataclass
+from typing import Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -118,6 +121,134 @@ def rolling_ts_folds(
         train_rows.sort()
         val_rows.sort()
         folds.append((train_rows, val_rows))
+    return folds
+
+
+@dataclass(frozen=True)
+class WalkForwardFold:
+    """Inclusive timestamp bounds for one walk-forward train/val/test fold (S6.1).
+
+    Bounds are timestamps on the unique trading-day axis (never mid cross-section).
+    Invariant: ``train_end < val_start <= val_end < test_start <= test_end``.
+    """
+
+    train_start: pd.Timestamp
+    train_end: pd.Timestamp
+    val_start: pd.Timestamp
+    val_end: pd.Timestamp
+    test_start: pd.Timestamp
+    test_end: pd.Timestamp
+
+    def to_monotonicity_record(self) -> dict:
+        """Shape accepted by :func:`equity.diagnostics.walk_forward_monotonicity.normalize_folds`."""
+        return {
+            "train_start": self.train_start,
+            "train_max": self.train_end,
+            "val_min": self.val_start,
+            "val_max": self.val_end,
+            "test_min": self.test_start,
+            "test_max": self.test_end,
+        }
+
+
+def walk_forward_folds(
+    panel: pd.DataFrame,
+    cfg: Union[object, None] = None,
+    *,
+    time_col: str = "period_close_ts",
+    train_window: Optional[int] = None,
+    val_window: Optional[int] = None,
+    test_window: Optional[int] = None,
+    step: Optional[int] = None,
+) -> List[WalkForwardFold]:
+    """Emit sliding walk-forward train/val/test folds on the unique-timestamp axis.
+
+    Geometry (per roll, windows in number of distinct timestamps)::
+
+        train = first ``train_window`` timestamps starting at offset k
+        val   = next ``val_window`` timestamps
+        test  = next ``test_window`` timestamps
+        k    += step   until the next test window no longer fits
+
+    Never cuts a cross-section mid-day (same invariant as :func:`ts_group_split`
+    / :func:`rolling_ts_folds`). Within each fold enforces
+    ``train_end < val_start <= val_end < test_start``.
+
+    Parameters
+    ----------
+    panel:
+        Feature / prices panel carrying ``time_col``.
+    cfg:
+        Optional object with ``train_window`` / ``val_window`` / ``test_window`` /
+        ``step`` / ``time_col`` attributes (e.g. :class:`WalkForwardConfig`).
+        Explicit kwargs override ``cfg``.
+    """
+    if cfg is not None:
+        time_col = getattr(cfg, "time_col", time_col) or time_col
+        if train_window is None:
+            train_window = int(getattr(cfg, "train_window"))
+        if val_window is None:
+            val_window = int(getattr(cfg, "val_window"))
+        if test_window is None:
+            test_window = int(getattr(cfg, "test_window"))
+        if step is None:
+            step = int(getattr(cfg, "step"))
+
+    if train_window is None or val_window is None or test_window is None or step is None:
+        raise ValueError(
+            "walk_forward_folds: need train_window/val_window/test_window/step "
+            "(via cfg or kwargs)"
+        )
+    tw, vw, tew, st = int(train_window), int(val_window), int(test_window), int(step)
+    if st <= 0:
+        raise ValueError(f"step must be > 0; got {st}")
+    if tw < 1 or vw < 1 or tew < 1:
+        raise ValueError(
+            f"windows must be >= 1; got train={tw}, val={vw}, test={tew}"
+        )
+    if time_col not in panel.columns:
+        raise ValueError(f"walk_forward_folds: missing time_col {time_col!r}")
+
+    unique_ts = pd.Index(pd.to_datetime(panel[time_col]).drop_duplicates().sort_values())
+    n_ts = len(unique_ts)
+    block = tw + vw + tew
+    if n_ts < block:
+        raise ValueError(
+            f"walk_forward_folds: need >= train+val+test distinct timestamps "
+            f"({block}); got n_ts={n_ts}."
+        )
+
+    folds: List[WalkForwardFold] = []
+    start = 0
+    while start + block <= n_ts:
+        train_i0, train_i1 = start, start + tw - 1
+        val_i0, val_i1 = start + tw, start + tw + vw - 1
+        test_i0, test_i1 = start + tw + vw, start + tw + vw + tew - 1
+        fold = WalkForwardFold(
+            train_start=pd.Timestamp(unique_ts[train_i0]),
+            train_end=pd.Timestamp(unique_ts[train_i1]),
+            val_start=pd.Timestamp(unique_ts[val_i0]),
+            val_end=pd.Timestamp(unique_ts[val_i1]),
+            test_start=pd.Timestamp(unique_ts[test_i0]),
+            test_end=pd.Timestamp(unique_ts[test_i1]),
+        )
+        if not (
+            fold.train_end < fold.val_start
+            <= fold.val_end
+            < fold.test_start
+            <= fold.test_end
+        ):
+            raise RuntimeError(
+                f"walk_forward_folds: internal bound invariant broken for fold "
+                f"starting at offset {start}: {fold}"
+            )
+        folds.append(fold)
+        start += st
+
+    if not folds:
+        raise ValueError(
+            f"walk_forward_folds: produced 0 folds (n_ts={n_ts}, block={block}, step={st})"
+        )
     return folds
 
 
