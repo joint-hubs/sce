@@ -1,29 +1,58 @@
 # Project State
 
 > Living document. Update at the end of every working session.
-> Last update: **2026-07-28** (FOC-52 S5 — In Review on `foc-52-multihorizon-forecaster`; FOC-51 S4 Done)
+> Last update: **2026-07-29** (FOC-53 S6 complete — walk-forward + portfolio + baseline-vs-SCE on `foc-53-s6-walk-forward`)
 
-## Equity forecasting pipeline (FOC-52) — In Review, branch `foc-52-multihorizon-forecaster`
+## Equity forecasting pipeline (FOC-53) — S6 Walk-forward + metrics, branch `foc-53-s6-walk-forward`
 
-**Status (2026-07-28):** Slice S5 (multi-horizon two-layer forecaster) IMPLEMENTED
-+ hand-off published + transitioned **In Review**. Commit `ec46d51`
-on feature branch `foc-52-multihorizon-forecaster` (off main post FOC-51 merge).
-28/28 new tests green; equity suite 337 passed + 7 skipped.
-Subtasks S5.1–S5.5: sector-head + residual + quantile + `forward_target_isolation`
-+ single-fold `run_smoke`. Horizons Q5 = `{1,5,10,21,63}`; quantiles Q7 =
-`{0.05,0.5,0.95}`; OOF residual labels (PRD §9.9); ts-group split (FOC-51 R1).
+**Status (2026-07-29):** Slice S6 IMPLEMENTED (S6.1–S6.4). Branch
+`foc-53-s6-walk-forward` off main post FOC-52 merge. S6.1+S6.2 `@ c9ff463` /
+harden `@ 0741c19`; S6.3+S6.4 this session.
 
-New package `equity/forecaster/`:
-- `config.py` — dataclass-only `HorizonConfig` / per-head params / `SmokeConfig`
-- `targets.py` — `add_forward_targets` → `ret_hN = log(close[t+N]/close[t])`
-- `sector_head.py` — `SectorHeadForecaster` (1 XGBoost / horizon, OOF CF)
-- `residual.py` — `InstrumentResidualForecaster` (OOF resid labels → `pred_hN`)
-- `quantile.py` — `QuantileHeadForecaster` (LightGBM quantile, 15 models)
-- `run_smoke.py` — `python -m equity.forecaster.run_smoke`
-- `metadata.py` — standalone `metadata.json` writer
-- `equity/diagnostics/forward_target_isolation.py` — S5.3 leak guard + CLI
+| Sub | What |
+|---|---|
+| S6.1 | `run_walk_forward` multi-fold train/val/test + optional per-fold SCE refit |
+| S6.2 | TEST-slice RMSE/MAE/hit-rate mean±std via `equity/metrics/accuracy.py` |
+| S6.3 | VAL-slice decile L/S + Sharpe/Sortino + `select_horizon` → `chosen_horizon` |
+| S6.4 | `run_baseline_vs_sce` two-leg report (Δ accuracy TEST, Δ sharpe VAL) |
 
-**Next:** finish tests → hand-off In Review. S6 walk-forward gated on S5.
+New / extended modules:
+- `equity/metrics/sharpe.py` — `decile_long_short_returns`, `sharpe_ratio`,
+  `sortino_ratio`, `select_horizon`, `aggregate_portfolio` (×sqrt(252))
+- `equity/forecaster/baseline_compare.py` — `run_baseline_vs_sce` + CLI
+- `equity/forecaster/run_walk_forward.py` — writes `chosen_horizon` +
+  `metrics[h].{sharpe,sortino}` (VAL) into `metadata.json`
+- Tests: `test_metrics_sharpe.py`, `test_baseline_compare.py`
+  (+ existing `test_walk_forward_runner*.py`)
+
+Invoke:
+```
+python -m equity.forecaster.run_walk_forward \
+  --prices data/synth_smoke/prices.parquet \
+  --sectors data/synth_smoke/sectors.csv \
+  --output results/forecaster/walk_forward_smoke \
+  --train-window 60 --val-window 15 --test-window 15 --step 30 \
+  --horizons 1,5
+
+python -m equity.forecaster.baseline_compare \
+  --prices data/synth_smoke/prices.parquet \
+  --sectors data/synth_smoke/sectors.csv \
+  --output results/forecaster/baseline_vs_sce_smoke \
+  --train-window 60 --val-window 15 --test-window 15 --step 30 \
+  --horizons 1,5
+```
+
+Canonical metadata schema (SCE leg / root of baseline-vs-sce):
+`walk_forward`, `chosen_horizon`, `metrics {h: rmse/mae/hit mean+std + sharpe + sortino}`,
+`baseline_vs_sce {h: d_rmse,d_mae,d_hit_rate,d_sharpe,d_sortino, comparison_report_path}`.
+
+**Next:** report-grade 5y S&P 500 night-run; review / hand-off In Review.
+
+## Equity forecasting pipeline (FOC-52) — Done (merged), multi-horizon forecaster
+
+**Status:** S5 merged to main via PR #4. Horizons Q5 = `{1,5,10,21,63}`;
+quantiles Q7 = `{0.05,0.5,0.95}`. Package `equity/forecaster/`
+(sector-head + residual + quantile + `run_smoke` + `forward_target_isolation`).
 
 ## Equity forecasting pipeline (FOC-51) — Done, branch `foc-51-sce-equity-crossfit` ready for merge
 
