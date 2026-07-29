@@ -2,8 +2,9 @@
 
 S1.3: ``published_at_guard`` leakage guard CLI. S3.3: ``lookahead_indicator``.
 S4.5: ``walk_forward_monotonicity``, ``survivorship_check``. S4.6: SCE reuse
-runners. Re-exported lazily so ``import equity.diagnostics`` stays light
-(pandas/pandera/sklearn loaded only when a symbol is actually accessed).
+runners. S5.3: ``forward_target_isolation``. Re-exported lazily so
+``import equity.diagnostics`` stays light (pandas/pandera/sklearn loaded only
+when a symbol is actually accessed).
 """
 
 from __future__ import annotations
@@ -34,6 +35,12 @@ def __getattr__(name: str):  # pragma: no cover - thin re-export
         from equity.diagnostics.survivorship_check import run_survivorship_check
 
         return run_survivorship_check
+    if name == "run_forward_target_isolation":
+        from equity.diagnostics.forward_target_isolation import (
+            run_forward_target_isolation,
+        )
+
+        return run_forward_target_isolation
     if name in {
         "evaluate_equity_sce",
         "run_permuted_target_equity",
@@ -53,6 +60,7 @@ __all__ = [
     "run_lookahead_indicator",
     "run_walk_forward_monotonicity",
     "run_survivorship_check",
+    "run_forward_target_isolation",
     "evaluate_equity_sce",
     "run_permuted_target_equity",
     "run_shuffled_groups_equity",
